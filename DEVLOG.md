@@ -26,12 +26,19 @@ instructions remain ignored, while public policy is tracked. A staged-content
 safety check rejects likely secrets, private home-directory paths, dangerous
 filenames, and non-GitHub commit email identities before a local landing.
 
+The reviewed foundation was published as the root commit of the public
+`ghreprimand/weftwise` repository. GitHub secret scanning and push protection
+are enabled. Private vulnerability reporting, vulnerability alerts, and
+automated dependency security fixes are enabled, and the unused wiki is
+disabled so maintained Markdown remains the documentation source of truth.
+
 ### Verification
 
 - All maintained relative documentation links resolve to tracked files.
 - The automated staged-content public-safety gate and a manual review for local
   paths, personal identifiers, private addresses, email addresses, and internal
   workflow language passed on 2026-08-29.
+- The public `main` branch was verified against the reviewed local commit.
 - The safety script passes Bash syntax validation. ShellCheck is unavailable in
   the current development environment and is not claimed.
 - Rust formatting, linting, tests, and dependency audit: unavailable because no

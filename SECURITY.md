@@ -15,10 +15,10 @@ revised before the first release.
 
 Do not open a public issue, pull request, or discussion for a vulnerability.
 
-Once the public repository is available, use GitHub's private vulnerability
-reporting from the repository's **Security** tab. Include the affected revision,
-the smallest safe reproduction, the expected behavior, and the observed impact.
-Do not include unrelated personal data or secrets in the report.
+Use [GitHub's private vulnerability reporting](https://github.com/ghreprimand/weftwise/security/advisories/new)
+from the repository's **Security** tab. Include the affected revision, the
+smallest safe reproduction, the expected behavior, and the observed impact. Do
+not include unrelated personal data or secrets in the report.
 
 ## Security boundaries
 

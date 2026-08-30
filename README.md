@@ -1,5 +1,10 @@
 # Weftwise
 
+[Development log](DEVLOG.md) |
+[Documentation](docs/) |
+[Issues](https://github.com/ghreprimand/weftwise/issues) |
+[Security](SECURITY.md)
+
 **A quiet, contextual desktop surface for OdysseyOS and Hyprland.**
 
 Weftwise is a native Wayland interface that replaces a permanently crowded
@@ -66,7 +71,8 @@ are accompanied by verification. Planned behavior is labeled as planned.
 
 ## Contributing and security
 
-The repository is being prepared for public development. Read
+The repository is publicly developed at
+[`ghreprimand/weftwise`](https://github.com/ghreprimand/weftwise). Read
 [CONTRIBUTING.md](CONTRIBUTING.md) before proposing or implementing a change.
 Security-sensitive reports must follow [SECURITY.md](SECURITY.md), not a public
 issue.
