@@ -27,12 +27,11 @@ rejects a wildcard safe-directory exception.
 - The complete worktree gate passed with Rust 1.96.0 in the project's
   digest-pinned Arch `base-devel` environment, including formatting,
   deny-warning Clippy, tests, documentation, public-safety, and RustSec.
-- A replacement GitHub Actions run remains required before the CI repair is
-  considered verified on the hosted runner.
+- GitHub Actions run `33314950838` passed all steps on commit `ebabd62`,
+  including the complete repository gate with Rust 1.96.0.
 
 ### Next
 
-- Push the reviewed repair and verify the replacement GitHub Actions run.
 - Continue the Phase 2 state and Hyprland integration landing after CI is green.
 
 ## 2026-08-30 - Implement the Phase 1 native surface proof
