@@ -6,6 +6,67 @@ or unmeasured. Planned work is never presented as implemented behavior.
 
 ---
 
+## 2026-08-30 - Implement the Phase 1 native surface proof
+
+The application now owns one top-anchored overlay-layer window per current GDK
+output. Every surface sets its monitor, layer, top/left/right anchors,
+`weftwise` namespace, keyboard mode, and candidate exclusive zone before it is
+presented. Its allocation remains 30 logical pixels high while the collapsed
+GDK input region covers only the 3-pixel Selvage. Input regions are first
+applied after realization and recomputed after allocation and scale changes.
+
+The root model owns deterministic Selvage, Ribbon, and Panel state for each
+output. Generation-checked dwell and dismissal timers prevent stale or
+interrupted transitions from changing presentation. The Ribbon animates inside
+fixed surface geometry, and reduced motion combines GTK's desktop setting with
+an explicit proof override. The attached GTK popover provides focusable actions,
+Escape and outside-click dismissal, and returns layer-shell keyboard mode to
+`None` when closed.
+
+The surface manager watches GDK monitor changes and reconciles create/remove
+lifecycle without exposing monitor metadata. GLib timer sources, the monitor
+signal, layer windows, the GTK animation preference signal, the Tokio shutdown
+listener, and adapter handles all have explicit owners and shutdown paths. GTK
+objects remain on the main thread; background work sends typed messages only.
+
+The native Hyprland/Waybar comparison selected zone `-1`, which is now the
+default. Both `0` and `-1` left the existing reserved work area unchanged, but
+only `-1` placed all four surfaces at the physical top edge. Zone `0` remains
+available through the public-safe `WEFTWISE_EXCLUSIVE_ZONE` switch for
+diagnostics. `WEFTWISE_REDUCED_MOTION` selects the explicit motion override.
+Invalid switch values produce redacted startup errors.
+
+### Verification
+
+- `bash .github/scripts/check.sh --worktree`: passed with Rust 1.97.1 and 32
+  tests; zero failed, ignored, or measured.
+- The same complete worktree gate passed with Rust 1.96.0 in the project's
+  digest-pinned Arch `base-devel` environment. GTK4 4.22.4 and
+  gtk4-layer-shell 1.3.0 were available there.
+- `cargo clippy --all-targets --locked -- -D warnings`, documentation,
+  dependency topology, production file size, public-safety, and RustSec passed
+  as part of that gate.
+- `timeout 10s cargo run --locked` without a display exited with status 1 and
+  the structured error `GTK could not initialize the active display backend`.
+- Deterministic tests cover dwell reveal, dismissal cancellation, stale timers,
+  Panel pin/close behavior, reduced motion, output-state reconciliation, both
+  zone values, and collapsed/expanded input geometry.
+- Native Hyprland/Waybar zone proof: passed on four outputs across scale factors
+  1.00, 1.25, and 1.67. Zone `-1` placed all four surfaces at the physical edge;
+  zone `0` placed none there. Neither changed the reserved-area fingerprint.
+  Corrected surfaces spanned every output in logical coordinates and shut down
+  without GTK child-finalization warnings.
+- Pointer pass-through, dwell interaction, stacking, fullscreen behavior,
+  outside click, and prior-client focus restoration remain unmeasured acceptance
+  checks rather than product claims.
+
+### Next
+
+- Complete the remaining pointer, keyboard, focus, and stacking rows in the
+  public-safe Hyprland/Waybar checklist.
+- Begin typed compositor state and direct Hyprland socket integration after the
+  native surface proof is accepted.
+
 ## 2026-08-30 - Adopt GPL-3.0-only
 
 The repository now licenses Weftwise under GPL-3.0-only, matching OdyTTY. Cargo

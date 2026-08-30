@@ -61,16 +61,30 @@ not turn hidden exact values into continuous UI work.
 
 ## Surface model
 
-A surface manager owns one top-anchored layer surface per output. Each surface
-uses the overlay layer and no exclusive zone. Its visual allocation is tall
+A surface manager owns one top-anchored overlay-layer surface per GDK output.
+Monitor, layer, anchors, namespace, keyboard mode, and the candidate exclusive
+zone are set before presentation. The fixed 30-pixel visual allocation is tall
 enough for the Ribbon, but its collapsed GDK input region covers only the
-Selvage. Transparent non-input pixels pass pointer events to the surface below.
+3-pixel Selvage. The region is first applied after realization and recomputed
+after allocation or scale notifications.
+
+The native proof defaults to `exclusive_zone = -1` and retains `0` as a manual
+comparison value. A native four-output Hyprland session with Waybar showed that
+neither value changed the existing reserved work area, while only `-1` placed
+every Weftwise surface at the physical top edge. Pointer pass-through, stacking,
+and focus behavior remain separate manual checks.
 
 The first interactive Panel is an attached GTK popover. Keyboard interactivity
-is enabled only while interaction requires it and is returned to none during
-collapse. The native proof must verify focus restoration, outside-click
-dismissal, Escape, compositor restart, and behavior beside Waybar before the
-Panel grows.
+is `OnDemand` only while the Panel is open and returns to `None` on dismissal.
+Dropping keyboard interactivity and GTK focus is the implemented restoration
+request; actual restoration to the prior Hyprland client, outside-click
+dismissal, Escape, stacking, and behavior beside Waybar still require the
+native checklist.
+
+Root state owns each output's presentation level, pointer state, reduced-motion
+projection, and timer generation. GTK callbacks emit typed actions. Stale dwell
+and dismissal timers cannot change state, and all GLib sources, output signals,
+surfaces, and supervised tasks have explicit shutdown owners.
 
 ## Configuration
 

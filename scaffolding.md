@@ -6,11 +6,12 @@ This document records the product and implementation decisions used to scaffold
 the public repository. Implemented behavior, once present, takes precedence over
 planned behavior and must remain synchronized with this document.
 
-The Phase 0 repository baseline is implemented: the locked Rust/Relm4 scaffold,
-retained module tree, bounded runtime settings, versioned XDG configuration
-types, and repository gates are present. Rust 1.96.0 is pinned and the complete
-locked gate passes under that exact compiler on the supported Arch baseline. No
-layer surface or product interface is implemented.
+The Phase 0 repository baseline is implemented and verified under the pinned
+Rust toolchain. Phase 1 native-proof code now owns per-output layer surfaces,
+fixed input geometry, deterministic reveal/dismissal state, and an attached
+Panel. A native Hyprland/Waybar comparison selected `exclusive_zone = -1` for
+physical-edge placement without a new reserved area. Pointer, stacking, and
+focus behavior remain unmeasured.
 
 ## Name
 
@@ -191,7 +192,7 @@ Layer shell can reserve an exclusive zone from an output edge, but it cannot des
 
 Therefore:
 
-- The companion Selvage and Ribbon should begin with `exclusive_zone = 0` and overlay applications/Waybar.
+- The companion Selvage and Ribbon use `exclusive_zone = -1` to reach the physical edge while overlaying applications and Waybar without reserving work area.
 - A future full replacement must choose between reserving the entire top band, overlaying application windows, or collapsing/revealing dynamically.
 - Separate island surfaces can improve rendering and pointer input regions, but they do not make Hyprland reserve an island-shaped tiling region.
 
@@ -265,8 +266,9 @@ components do not replace the domain, adapter, or surface ownership layers.
 
 - Initialize the Rust project and development tooling.
 - Open one GTK4 layer-shell surface per output.
-- Use the overlay layer, no exclusive zone, and a transparent fixed-height
-  surface whose collapsed input region covers only the 2-3 pixel Selvage.
+- Use the overlay layer and a transparent fixed-height surface whose collapsed
+  input region covers only the 2-3 pixel Selvage. The native A/B test selected
+  zone `-1` for the physical-edge, non-reserving policy.
 - Reveal a styled Ribbon without resizing the layer surface.
 - Add structured logging and clean shutdown.
 - Verify pointer pass-through, dwell reveal, dismissal, focus restoration,

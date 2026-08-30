@@ -12,10 +12,11 @@ and expands when used. It starts alongside Waybar. Planned features include
 workspace navigation, activity progress, privacy indicators, temporary system
 feedback, and system controls.
 
-The project is pre-alpha. The repository contains a buildable Rust/Relm4
-scaffold and the design, architecture, and repository-safety documentation.
-The executable initializes a hidden root component, but no layer surface or
-product interface is implemented yet.
+The project is pre-alpha. The repository contains a buildable Rust/Relm4 native
+proof and the design, architecture, and repository-safety documentation. The
+proof implements per-output layer surfaces and the Selvage, Ribbon, and Panel
+interaction model. Real-session placement, pointer pass-through, stacking, and
+focus behavior remain unmeasured until the Hyprland/Waybar checklist passes.
 
 ## Interface model
 
@@ -62,14 +63,22 @@ configuration types, redacted diagnostic defaults, and local/CI validation
 scripts. Rust 1.96.0 is the pinned project toolchain and has passed the complete
 locked gate on the supported Arch native-library baseline.
 
-The next native proof requires:
+The Phase 1 native proof code provides:
 
-1. one non-exclusive top-edge surface per output;
-2. a 2-3 pixel pointer-active Selvage with click-through transparent space;
-3. animated Ribbon reveal without resizing the layer surface;
-4. tested pointer, focus, Escape, and outside-click behavior;
-5. active workspace/window state with a clock fallback; and
-6. startup and shutdown without orphaned adapter tasks.
+1. one top-edge overlay surface per GDK output;
+2. fixed transparent geometry with a 3-pixel collapsed input region;
+3. deterministic dwell reveal, delayed dismissal, and explicit Panel state;
+4. Ribbon animation with GTK and explicit reduced-motion handling;
+5. an attached keyboard-navigable Panel with Escape and outside-click
+   dismissal; and
+6. owned output signals, UI timers, process shutdown handling, and adapter
+   cancellation.
+
+The proof uses `exclusive_zone = -1`. A public-safe native Hyprland comparison
+beside Waybar showed that `0` and `-1` preserved the existing work area, while
+only `-1` kept every surface at the physical top edge. Pointer pass-through,
+stacking, and focus restoration remain manual acceptance checks. Active
+workspace/window state and clock fallback begin in Phase 2.
 
 Claims in project documentation describe implemented behavior only when they
 are accompanied by verification. Planned behavior is labeled as planned.

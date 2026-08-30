@@ -64,6 +64,33 @@ use invented identities, paths, desktop text, metadata, hosts, outputs, and
 process arguments. The public-safety script supplements, but does not replace,
 manual inspection.
 
+## Phase 1 native proof
+
+Run the selected zone-`-1` policy only from a native Hyprland session:
+
+```sh
+cargo run --locked
+```
+
+Select the retained zone-`0` comparison or force reduced motion with public-safe
+environment switches:
+
+```sh
+WEFTWISE_EXCLUSIVE_ZONE=0 cargo run --locked
+WEFTWISE_REDUCED_MOTION=1 cargo run --locked
+```
+
+`WEFTWISE_EXCLUSIVE_ZONE` accepts only `0` and `-1`.
+`WEFTWISE_REDUCED_MOTION` accepts `0`, `1`, `false`, and `true`. Invalid values
+produce redacted startup errors. A missing display also exits with a structured
+error instead of creating partial surfaces.
+
+Use [the public-safe manual checklist](../tests/phase1_manual_hyprland_waybar_checklist.md)
+for native interaction checks. The zone comparison selected `-1` after a
+four-output session showed physical-top placement without a new reserved area.
+Do not infer pointer pass-through, focus restoration, or stacking from
+automated state tests.
+
 ## Required gates
 
 Run the complete local gate with full output retained below the ignored

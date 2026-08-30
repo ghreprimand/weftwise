@@ -7,9 +7,12 @@ state determine which one is visible.
 
 ### Selvage
 
-The resting surface is a 2-3 pixel line anchored to the top edge with no
-exclusive zone. It accepts pointer input at the screen boundary and does not
-reserve application space.
+The resting surface is a 2-3 pixel line anchored to the top edge. It accepts
+pointer input at the screen boundary and must not reserve application space.
+The native proof uses layer-shell zone `-1`. A native comparison against `0`
+showed that both values preserved the existing work area, while only `-1`
+retained physical-edge placement beside Waybar. Value `0` remains available as
+a diagnostic comparison.
 
 Its three stable regions are:
 
@@ -41,9 +44,11 @@ change system state.
 
 ### Panel
 
-Clicking the Ribbon or invoking a Hyprland binding opens the Panel on the
-focused output. It provides keyboard navigation, search, controls, and history.
-Escape and outside click dismiss it and restore prior focus.
+Clicking the Ribbon opens the proof Panel on that output. A focused-output
+Hyprland binding is planned with compositor state in Phase 2. The Panel provides
+keyboard navigation; Escape and outside click dismiss it. The proof returns
+layer-shell keyboard interactivity to `None`, while real restoration to the
+prior client remains a native-session acceptance check.
 
 Initial Panel destinations are workspace/window navigation, media, calendar,
 audio routing, notifications, clipboard history, system health, and power.
