@@ -302,7 +302,8 @@ components do not replace the domain, adapter, or surface ownership layers.
 
 ### Phase 5 - System feedback
 
-- Volume and microphone state through PipeWire/WirePlumber.
+- Volume and microphone state through direct PipeWire graph, parameter, and
+  metadata APIs while WirePlumber retains policy ownership.
 - Temporary volume and brightness OSDs.
 - Recording, screen-sharing, camera, and privacy indicators.
 - Timers and supervised process/build progress.

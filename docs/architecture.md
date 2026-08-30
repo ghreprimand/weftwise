@@ -6,7 +6,7 @@ protocols, application policy, and GTK presentation.
 ```text
 Hyprland sockets ---------+
 D-Bus services -----------+
-PipeWire/WirePlumber -----+--> service adapters --> typed messages
+PipeWire graph/metadata --+--> service adapters --> typed messages
 process supervision ------+                         |
 clock and sensors --------+                         v
                                                root reducer
@@ -58,6 +58,50 @@ privacy-critical content is the highest class. Logically late delivery is
 reconciled through normalized timestamps so equal candidate sets do not depend
 on insertion order. Expiration always releases stickiness and reveals the next
 ranked candidate, including the clock fallback.
+
+## Privacy evidence
+
+Privacy evidence is a transport-independent domain that produces privacy
+candidates without performing any I/O; selected evidence adapters feed
+observations into it. Each source
+(microphone, camera, screen sharing, recording, and idle inhibitor) keeps one
+of five distinct states: active, inactive, unknown, unavailable, and stale.
+These states never collapse into one another. A confirmed-off source is
+inactive; a supported source that has not reported yet is unknown; a source
+whose observation failed is unavailable; and a previously observed source that
+can no longer be trusted is stale.
+
+A source is unsupported until an adapter declares it, and unsupported detections
+are silent rather than reported as inactive. Only supported sources produce
+candidates: an active capture is privacy-critical, an active idle inhibitor is
+an interruptible warning, and a failure state (unavailable or stale) produces an
+uncertainty candidate so a degraded source stays visible instead of silently
+implying that nothing is happening.
+
+The selected native audio boundary observes PipeWire registry, node, device,
+link, parameter, and default-metadata changes on one supervisor-owned thread.
+WirePlumber remains the session policy owner. PipeWire capture graphs provide
+scoped positive microphone, camera, and screen-capture evidence; their absence
+cannot prove that direct ALSA, V4L2, or libcamera clients are inactive.
+Hyprland screencast lifecycle events supplement screen-capture evidence, while
+Hyprland client snapshots and logind inhibitor snapshots provide complementary
+idle-inhibition evidence. Recording and network sharing cannot be
+distinguished from capture by these transports and remain unsupported as
+separate detections. Any incomplete, ambiguous, disconnected, or gap-affected
+source remains unknown, unavailable, or stale rather than becoming inactive.
+
+## Temporary feedback
+
+Temporary feedback confirms a discrete change: a volume or brightness step, a
+microphone toggle, a screenshot, or a launched command's result. A pure emitter
+turns those events into bounded, self-expiring feedback candidates. Each kind
+maps to one stable identity, so repeated events update a single candidate in
+place. Every candidate carries an explicit expiration, and its untrusted text
+and progress are bounded before emission. A per-kind minimum interval
+rate-limits rapid streams such as a dragged volume slider: events inside the
+interval are coalesced to the latest value and flushed once the interval
+elapses, so the final value is never lost. Only already-defined typed actions
+appear; result-style feedback offers explicit dismissal.
 
 ## Async supervision
 

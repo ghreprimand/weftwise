@@ -122,8 +122,10 @@ are accompanied by verification. Planned behavior is labeled as planned.
 ## Building the scaffold
 
 The documented native baseline is OdysseyOS/Arch with `base-devel`, `rustup`,
-`gtk4`, and `gtk4-layer-shell`. PipeWire and WirePlumber development packages
-are deferred until their integration boundary is selected. See
+`gtk4`, `gtk4-layer-shell`, and `pipewire`. The selected audio boundary uses
+direct PipeWire registry and metadata APIs while the installed WirePlumber
+service remains the policy owner; Weftwise does not link a WirePlumber Rust
+binding. See
 [building and validation](docs/building.md) for package checks, configuration
 locations, runtime limits, and repository gates.
 

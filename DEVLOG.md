@@ -6,6 +6,66 @@ or unmeasured. Planned work is never presented as implemented behavior.
 
 ---
 
+## 2026-08-30 - Add Phase 5 privacy and temporary-feedback domain
+
+A new privacy evidence domain models microphone, camera, screen-sharing,
+recording, and idle-inhibitor sources with five distinct states: active,
+inactive, unknown, unavailable, and stale. The states never collapse into one
+another. Each source is unsupported until an adapter declares it, and
+unsupported detections stay silent rather than reporting inactive. Only
+supported sources produce candidates: active capture is privacy-critical, an
+active idle inhibitor is an interruptible warning, and a failure state
+(unavailable or stale) produces an uncertainty candidate so a degraded source
+stays visible instead of implying nothing is happening. Adapter degradation
+marks supported observations stale, never inactive, and does not overwrite a
+source already recorded as unavailable. The domain performs no D-Bus, PipeWire,
+or process work.
+
+The audio and capture research boundary is now selected: a dedicated,
+supervisor-owned thread will observe direct PipeWire registry, graph, parameter,
+and default-metadata APIs while WirePlumber remains the policy owner. The
+unusable crates.io WirePlumber stub is not adopted, `wpctl` is not a refresh
+path, and no PipeWire object crosses the thread boundary. PipeWire evidence is
+explicitly scoped: capture absence cannot prove that direct device clients are
+inactive, and the selected transports cannot distinguish recording from
+network sharing. Hyprland and logind provide complementary screen-capture and
+idle-inhibitor evidence. These adapters remain unimplemented in this landing.
+
+A new temporary-feedback emitter turns discrete volume, microphone, brightness,
+screenshot, and command-result events into bounded, self-expiring feedback
+candidates. Each kind maps to one stable identity for deduplication and
+update-in-place, carries an explicit expiration, and bounds its untrusted text
+and progress before emission. A per-kind minimum interval rate-limits rapid
+streams by coalescing to the latest value and flushing once the interval
+elapses, so the final value is never lost. Only already-defined typed actions
+are used, and result-style feedback offers explicit dismissal. Both producers
+are root-owned and feed the existing arbitration reducer through the same typed
+inputs the media domain uses. No transport adapter or message route is added,
+and no selected evidence source is presented as working.
+
+### Verification
+
+- New privacy and feedback unit tests cover unsupported silence,
+  privacy-critical active capture, idle-inhibitor warning classing,
+  inactive and not-yet-reported sources, failure states remaining visible as
+  uncertainty, degradation-to-stale semantics, deduplication, rate-limit
+  coalescing and flush, per-kind channel isolation, action and text bounds, and
+  kind-scoped dismissal.
+- `cargo test --locked`: passed 90 tests; zero failed or ignored.
+- The complete worktree gate passes: formatting, deny-warning Clippy, 90 tests,
+  documentation, file-size and dependency-topology checks, public-safety
+  automation, and RustSec over 148 dependencies and 1,226 advisories.
+- The same complete gate passes with exact Rust 1.96.0 in the digest-pinned
+  Arch environment with PipeWire 1.6.8 available through `libpipewire-0.3`.
+- Native behavior and audio/PipeWire integration remain unmeasured in this
+  landing.
+
+### Next
+
+- Implement the selected direct-PipeWire audio and capture boundary, then add
+  Hyprland and logind evidence adapters without weakening unknown, unavailable,
+  stale, and unsupported states.
+
 ## 2026-08-30 - Add bounded MPRIS media integration
 
 The independently supervised MPRIS adapter now opens its session-bus connection

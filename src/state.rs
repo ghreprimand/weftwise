@@ -10,6 +10,8 @@ use crate::context::arbitration::{
     PreemptionClass, PresentationCandidate, PresentationKind, PresentationProjection, Progress,
     Severity, Timestamp,
 };
+use crate::context::feedback::{FeedbackEmitter, FeedbackEvent, FeedbackKind};
+use crate::context::privacy::{PrivacyDomain, PrivacyUpdate};
 use crate::services::mpris::MediaUpdate;
 
 /// Delay before a pointer at the top edge reveals the Ribbon.
@@ -876,6 +878,9 @@ pub struct AppState {
     pub desktop: DesktopState,
     /// Root-owned media domain state.
     pub media: MediaState,
+    /// Root-owned privacy evidence domain state.
+    pub privacy: PrivacyDomain,
+    feedback: FeedbackEmitter,
     clock_label: String,
     arbitration: Arbitrator,
     arbitration_now: Timestamp,
@@ -1063,6 +1068,70 @@ impl AppState {
             .active
             .as_ref()
             .and_then(|id| self.media.players.get(id))
+    }
+
+    /// Apply one privacy observation and republish privacy candidates.
+    ///
+    /// The privacy domain is republished as a whole: stale `Privacy`-source
+    /// candidates are cleared and the current supported evidence is upserted,
+    /// so a source that stops being active no longer lingers in arbitration.
+    pub fn apply_privacy_update(
+        &mut self,
+        update: PrivacyUpdate,
+        observed_millis: u64,
+    ) -> Vec<OutputId> {
+        let now = self.advance_now(observed_millis);
+        self.privacy.apply(update, now);
+        self.arbitration
+            .apply(ArbitrationInput::SourceStale(CandidateSource::Privacy), now);
+        for candidate in self.privacy.candidates(now) {
+            self.arbitration
+                .apply(ArbitrationInput::Upsert(candidate), now);
+        }
+        self.refresh_arbitration_selections();
+        self.output_ids().collect()
+    }
+
+    /// Offer one temporary feedback event to the rate-limited emitter.
+    pub fn apply_feedback(&mut self, event: FeedbackEvent, observed_millis: u64) -> Vec<OutputId> {
+        let now = self.advance_now(observed_millis);
+        if let Some(input) = self.feedback.offer(event, now) {
+            self.arbitration.apply(input, now);
+            self.refresh_arbitration_selections();
+            self.output_ids().collect()
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Flush any coalesced feedback whose rate-limit interval has elapsed.
+    pub fn flush_feedback(&mut self, observed_millis: u64) -> Vec<OutputId> {
+        let now = self.advance_now(observed_millis);
+        let inputs = self.feedback.flush(now);
+        if inputs.is_empty() {
+            return Vec::new();
+        }
+        for input in inputs {
+            self.arbitration.apply(input, now);
+        }
+        self.refresh_arbitration_selections();
+        self.output_ids().collect()
+    }
+
+    /// Explicitly dismiss one temporary feedback candidate.
+    pub fn dismiss_feedback(&mut self, kind: FeedbackKind, observed_millis: u64) -> Vec<OutputId> {
+        let now = self.advance_now(observed_millis);
+        let input = self.feedback.dismiss(kind);
+        self.arbitration.apply(input, now);
+        self.refresh_arbitration_selections();
+        self.output_ids().collect()
+    }
+
+    /// Advance the normalized arbitration clock monotonically past prior state.
+    fn advance_now(&mut self, observed_millis: u64) -> Timestamp {
+        let observed = observed_millis.max(self.arbitration_now.as_millis().saturating_add(1));
+        self.arbitration_now = Timestamp::from_millis(observed);
+        self.arbitration_now
     }
 
     /// Update the formatted local clock fallback.

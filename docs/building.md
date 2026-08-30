@@ -8,18 +8,22 @@ Hyprland. Other distributions are unverified.
 Install the native build baseline through the system package manager:
 
 ```sh
-sudo pacman -S --needed base-devel rustup gtk4 gtk4-layer-shell
+sudo pacman -S --needed base-devel rustup gtk4 gtk4-layer-shell pipewire
 ```
 
-Confirm both required native interfaces before invoking Cargo:
+Confirm the required native interfaces before invoking Cargo:
 
 ```sh
 pkg-config --modversion gtk4
 pkg-config --modversion gtk4-layer-shell-0
+pkg-config --modversion libpipewire-0.3
 ```
 
-PipeWire and WirePlumber development packages are intentionally deferred until
-the audio integration boundary is selected and compiled.
+The selected audio boundary links the upstream PipeWire Rust binding to
+`libpipewire-0.3`. Arch's `pipewire` package supplies that interface without a
+separate development package. WirePlumber remains the runtime policy owner;
+Weftwise uses PipeWire metadata and graph APIs rather than linking a
+WirePlumber Rust binding or polling `wpctl`.
 
 ## Rust dependency baseline
 
