@@ -17,7 +17,10 @@ workspace and active-context rendering, and a boundary-aligned in-process clock.
 Phase 3 adds the root-owned deterministic presentation candidate reducer plus
 stable navigation/activity/attention projections whose shape, fill pattern,
 text, and accessible labels do not rely on color alone. Compositor restart and
-native accessibility behavior remain session checks.
+native accessibility behavior remain session checks. Phase 4 now provides
+subscribed MPRIS discovery, bounded media state, deterministic active-player
+selection, progress and Ribbon projections, typed capability-gated controls,
+and independent player/session-bus restart recovery.
 
 ## Name
 
@@ -290,10 +293,12 @@ components do not replace the domain, adapter, or surface ownership layers.
   snapshots, and replays buffered address-bearing events before steady state.
 - Local workspace marks, focused active context, and the boundary-aligned clock
   fallback are implemented as immutable surface projections.
-- Add MPRIS media discovery and playback state over D-Bus.
-- Implement priority-based content arbitration.
+- MPRIS media discovery, subscribed playback state, bounded metadata, and
+  capability-gated controls are implemented over D-Bus.
+- Deterministic content arbitration is implemented.
 - Add click-to-open Panel behavior and a Hyprland keybinding entry point.
-- Handle Hyprland and media-player restarts without restarting Weftwise.
+- Hyprland, media-player, and session-bus restart recovery is implemented;
+  sanitized native-session restart evidence remains a manual check.
 
 ### Phase 5 - System feedback
 

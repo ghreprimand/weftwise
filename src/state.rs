@@ -6,9 +6,11 @@ use std::time::Duration;
 
 use crate::config::Config;
 use crate::context::arbitration::{
-    ArbitrationInput, Arbitrator, CandidateAction, CandidateRegion, PresentationKind,
-    PresentationProjection, Severity, Timestamp,
+    ArbitrationInput, Arbitrator, CandidateAction, CandidateId, CandidateRegion, CandidateSource,
+    PreemptionClass, PresentationCandidate, PresentationKind, PresentationProjection, Progress,
+    Severity, Timestamp,
 };
+use crate::services::mpris::MediaUpdate;
 
 /// Delay before a pointer at the top edge reveals the Ribbon.
 pub const DWELL_DELAY: Duration = Duration::from_millis(240);
@@ -21,6 +23,8 @@ pub const MAX_NAVIGATION_MARKS: usize = 16;
 pub const MAX_ACTIVITY_MARKS: usize = 4;
 /// Maximum warning/privacy marks rendered in the attention region.
 pub const MAX_ATTENTION_MARKS: usize = 4;
+/// Time a stopped player remains eligible as recent media context.
+pub const MEDIA_RECENT_ACTIVITY_MILLIS: u64 = 30_000;
 
 /// Process-local identity assigned to a GDK output surface.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -130,19 +134,46 @@ impl fmt::Debug for DisplayText {
 }
 
 fn bounded_text(value: &str, maximum_characters: usize) -> String {
-    value
-        .chars()
-        .filter_map(|character| {
-            if character.is_control() {
-                (character == '\t').then_some(' ')
-            } else {
-                Some(character)
+    let mut output = String::new();
+    let mut length = 0_usize;
+    let mut pending_space = false;
+    for character in value.chars() {
+        if unsafe_unicode_format(character) {
+            continue;
+        }
+        if character.is_whitespace() {
+            pending_space = !output.is_empty();
+            continue;
+        }
+        if character.is_control() {
+            continue;
+        }
+        if pending_space {
+            if length == maximum_characters {
+                break;
             }
-        })
-        .take(maximum_characters)
-        .collect::<String>()
-        .trim()
-        .to_owned()
+            output.push(' ');
+            length += 1;
+            pending_space = false;
+        }
+        if length == maximum_characters {
+            break;
+        }
+        output.push(character);
+        length += 1;
+    }
+    output
+}
+
+fn unsafe_unicode_format(character: char) -> bool {
+    matches!(
+        character,
+        '\u{061c}'
+            | '\u{200b}'..='\u{200f}'
+            | '\u{202a}'..='\u{202e}'
+            | '\u{2060}'..='\u{206f}'
+            | '\u{feff}'
+    )
 }
 
 /// Availability of one independently supervised adapter.
@@ -157,6 +188,212 @@ pub enum AdapterAvailability {
     Stale,
     /// The adapter has no usable transport or retained snapshot.
     Unavailable,
+}
+
+/// Stable, bounded MPRIS well-known bus identity.
+#[derive(Clone, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct MediaPlayerId(String);
+
+impl MediaPlayerId {
+    /// Accept only protocol-valid MPRIS well-known names.
+    #[must_use]
+    pub fn new(value: &str) -> Option<Self> {
+        const PREFIX: &str = "org.mpris.MediaPlayer2.";
+        if value.len() > 255
+            || !value.starts_with(PREFIX)
+            || value.len() == PREFIX.len()
+            || zbus::names::WellKnownName::try_from(value).is_err()
+        {
+            return None;
+        }
+        Some(Self(value.to_owned()))
+    }
+
+    /// Borrow the exact identity for D-Bus correlation.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for MediaPlayerId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("<redacted-media-player>")
+    }
+}
+
+/// Normalized MPRIS playback state.
+#[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
+pub enum MediaPlaybackStatus {
+    /// The player returned an unsupported or malformed state.
+    #[default]
+    Unknown,
+    /// No active playback item.
+    Stopped,
+    /// Playback is paused.
+    Paused,
+    /// Playback is active.
+    Playing,
+}
+
+impl MediaPlaybackStatus {
+    /// Parse the three MPRIS values without treating unknown input as activity.
+    #[must_use]
+    pub fn parse(value: &str) -> Self {
+        match value {
+            "Playing" => Self::Playing,
+            "Paused" => Self::Paused,
+            "Stopped" => Self::Stopped,
+            _ => Self::Unknown,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::Stopped => "stopped",
+            Self::Paused => "paused",
+            Self::Playing => "playing",
+        }
+    }
+}
+
+/// Bounded, sanitized media metadata.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct MediaMetadata {
+    /// Display title, at most 256 characters.
+    pub title: DisplayText,
+    /// Joined artists, at most 256 characters.
+    pub artist: DisplayText,
+    /// Safe bounded artwork URL retained for future rendering.
+    pub art_url: Option<DisplayText>,
+    /// Duration in microseconds, clamped to seven days.
+    pub duration_micros: u64,
+    /// Position in microseconds, clamped to the duration when known.
+    pub position_micros: u64,
+}
+
+impl MediaMetadata {
+    /// Bound metadata received from an untrusted session-bus peer.
+    #[must_use]
+    pub fn bounded(
+        title: &str,
+        artists: &[String],
+        art_url: Option<&str>,
+        duration_micros: Option<i64>,
+        position_micros: i64,
+    ) -> Self {
+        const MAX_DURATION_MICROS: u64 = 7 * 24 * 60 * 60 * 1_000_000;
+        let duration_micros = duration_micros
+            .and_then(|value| u64::try_from(value).ok())
+            .unwrap_or_default()
+            .min(MAX_DURATION_MICROS);
+        let position_micros =
+            u64::try_from(position_micros)
+                .unwrap_or_default()
+                .min(if duration_micros == 0 {
+                    MAX_DURATION_MICROS
+                } else {
+                    duration_micros
+                });
+        let artist = artists
+            .iter()
+            .map(String::as_str)
+            .filter(|value| !value.is_empty())
+            .take(16)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let art_url = art_url.and_then(|value| {
+            let bounded = DisplayText::new(value, 2_048);
+            let safe_scheme = ["https://", "http://"]
+                .iter()
+                .any(|prefix| bounded.as_str().starts_with(prefix));
+            safe_scheme.then_some(bounded)
+        });
+        Self {
+            title: DisplayText::new(title, 256),
+            artist: DisplayText::new(&artist, 256),
+            art_url,
+            duration_micros,
+            position_micros,
+        }
+    }
+}
+
+/// MPRIS methods advertised by one player.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct MediaCapabilities {
+    /// The player accepts control methods.
+    pub can_control: bool,
+    /// The player can begin or resume playback.
+    pub can_play: bool,
+    /// The player can pause playback.
+    pub can_pause: bool,
+    /// The player can select a previous item.
+    pub can_previous: bool,
+    /// The player can select a next item.
+    pub can_next: bool,
+    /// The player can seek relative to its current position.
+    pub can_seek: bool,
+}
+
+/// Complete root-owned snapshot for one player.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MediaPlayer {
+    /// Stable well-known bus identity.
+    pub id: MediaPlayerId,
+    /// Adapter-owned generation for the current unique D-Bus owner.
+    pub owner_generation: u64,
+    /// Sanitized human-readable player identity.
+    pub identity: DisplayText,
+    /// Current playback state.
+    pub status: MediaPlaybackStatus,
+    /// Sanitized metadata and bounded position.
+    pub metadata: MediaMetadata,
+    /// Advertised control capabilities.
+    pub capabilities: MediaCapabilities,
+    /// Monotonic adapter sequence used for deterministic recent activity.
+    pub activity_sequence: u64,
+}
+
+impl MediaPlayer {
+    /// Construct a player whose display fields remain bounded.
+    #[must_use]
+    pub fn bounded(
+        id: MediaPlayerId,
+        owner_generation: u64,
+        identity: &str,
+        status: MediaPlaybackStatus,
+        metadata: MediaMetadata,
+        capabilities: MediaCapabilities,
+        activity_sequence: u64,
+    ) -> Self {
+        let capabilities = if capabilities.can_control {
+            capabilities
+        } else {
+            MediaCapabilities::default()
+        };
+        Self {
+            id,
+            owner_generation,
+            identity: DisplayText::new(identity, 128),
+            status,
+            metadata,
+            capabilities,
+            activity_sequence,
+        }
+    }
+}
+
+/// Root-owned MPRIS domain state.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct MediaState {
+    /// Independent adapter availability.
+    pub availability: AdapterAvailability,
+    /// Current players keyed by well-known name.
+    pub players: BTreeMap<MediaPlayerId, MediaPlayer>,
+    /// Deterministically selected active player.
+    pub active: Option<MediaPlayerId>,
 }
 
 /// Stable Hyprland workspace identity.
@@ -637,6 +874,8 @@ pub struct AppState {
     output_connectors: BTreeMap<OutputId, Option<OutputName>>,
     /// Root-owned compositor domain state.
     pub desktop: DesktopState,
+    /// Root-owned media domain state.
+    pub media: MediaState,
     clock_label: String,
     arbitration: Arbitrator,
     arbitration_now: Timestamp,
@@ -736,6 +975,94 @@ impl AppState {
             }
         }
         self.output_ids().collect()
+    }
+
+    /// Apply one ordered MPRIS update and refresh its arbitration candidate.
+    pub fn apply_media_update(&mut self, update: MediaUpdate) -> Vec<OutputId> {
+        let observed_millis = match update {
+            MediaUpdate::Connecting => {
+                self.media.availability = if self.media.players.is_empty() {
+                    AdapterAvailability::Starting
+                } else {
+                    AdapterAvailability::Stale
+                };
+                return Vec::new();
+            }
+            MediaUpdate::Snapshot {
+                players,
+                observed_millis,
+            } => {
+                self.media.players = players
+                    .into_iter()
+                    .take(32)
+                    .map(|player| (player.id.clone(), player))
+                    .collect();
+                self.media.availability = AdapterAvailability::Ready;
+                observed_millis
+            }
+            MediaUpdate::PlayerChanged {
+                player,
+                observed_millis,
+            } => {
+                if self.media.players.len() < 32 || self.media.players.contains_key(&player.id) {
+                    self.media.players.insert(player.id.clone(), player);
+                }
+                self.media.availability = AdapterAvailability::Ready;
+                observed_millis
+            }
+            MediaUpdate::PlayerRemoved {
+                id,
+                observed_millis,
+            } => {
+                self.media.players.remove(&id);
+                observed_millis
+            }
+            MediaUpdate::Tick { observed_millis } => observed_millis,
+            MediaUpdate::Unavailable => {
+                self.media.availability = if self.media.players.is_empty() {
+                    AdapterAvailability::Unavailable
+                } else {
+                    AdapterAvailability::Stale
+                };
+                self.media.active = None;
+                return self.apply_arbitration(
+                    ArbitrationInput::SourceStale(CandidateSource::Media),
+                    self.arbitration_now,
+                );
+            }
+        };
+
+        self.media.active = select_active_player(&self.media.players, observed_millis)
+            .map(|player| player.id.clone());
+        let observed_millis =
+            observed_millis.max(self.arbitration_now.as_millis().saturating_add(1));
+        let now = Timestamp::from_millis(observed_millis);
+        self.arbitration_now = now;
+        if let Some(player) = self.active_media_player() {
+            self.arbitration
+                .apply(ArbitrationInput::Upsert(media_candidate(player, now)), now);
+        } else {
+            self.arbitration
+                .apply(ArbitrationInput::SourceStale(CandidateSource::Media), now);
+        }
+        self.refresh_arbitration_selections();
+        self.output_ids().collect()
+    }
+
+    /// Return the selected media player for a capability-gated output action.
+    #[must_use]
+    pub fn selected_media_player(&self, output: OutputId) -> Option<&MediaPlayer> {
+        let selected = self.selected_candidates.get(&output)?;
+        (selected.source == CandidateSource::Media)
+            .then(|| self.active_media_player())
+            .flatten()
+    }
+
+    fn active_media_player(&self) -> Option<&MediaPlayer> {
+        self.media
+            .active
+            .as_ref()
+            .and_then(|id| self.media.players.get(id))
     }
 
     /// Update the formatted local clock fallback.
@@ -1126,6 +1453,103 @@ fn workspace_accessible_label(label: &str, active: bool, occupied: bool) -> Stri
         (false, false) => "inactive, empty",
     };
     format!("Workspace {label}: {state}")
+}
+
+fn select_active_player(
+    players: &BTreeMap<MediaPlayerId, MediaPlayer>,
+    observed_millis: u64,
+) -> Option<&MediaPlayer> {
+    players
+        .values()
+        .filter(|player| match player.status {
+            MediaPlaybackStatus::Playing | MediaPlaybackStatus::Paused => true,
+            MediaPlaybackStatus::Stopped => {
+                player.activity_sequence > 0
+                    && observed_millis.saturating_sub(player.activity_sequence)
+                        < MEDIA_RECENT_ACTIVITY_MILLIS
+            }
+            MediaPlaybackStatus::Unknown => false,
+        })
+        .max_by(|left, right| {
+            media_status_rank(left.status)
+                .cmp(&media_status_rank(right.status))
+                .then_with(|| left.activity_sequence.cmp(&right.activity_sequence))
+                .then_with(|| right.id.cmp(&left.id))
+        })
+}
+
+fn media_status_rank(status: MediaPlaybackStatus) -> u8 {
+    match status {
+        MediaPlaybackStatus::Unknown => 0,
+        MediaPlaybackStatus::Stopped => 1,
+        MediaPlaybackStatus::Paused => 2,
+        MediaPlaybackStatus::Playing => 3,
+    }
+}
+
+fn media_candidate(player: &MediaPlayer, now: Timestamp) -> PresentationCandidate {
+    let title = player.metadata.title.as_str();
+    let artist = player.metadata.artist.as_str();
+    let identity = player.identity.as_str();
+    let label = match (title.is_empty(), artist.is_empty()) {
+        (false, false) => format!("{title} · {artist}"),
+        (false, true) => title.to_owned(),
+        (true, false) => artist.to_owned(),
+        (true, true) if !identity.is_empty() => identity.to_owned(),
+        (true, true) => "Media player".to_owned(),
+    };
+    let mut actions = Vec::new();
+    if player.capabilities.can_control
+        && match player.status {
+            MediaPlaybackStatus::Playing => player.capabilities.can_pause,
+            MediaPlaybackStatus::Paused | MediaPlaybackStatus::Stopped => {
+                player.capabilities.can_play
+            }
+            MediaPlaybackStatus::Unknown => false,
+        }
+    {
+        actions.push(CandidateAction::MediaPlayPause);
+    }
+    if player.capabilities.can_control && player.capabilities.can_previous {
+        actions.push(CandidateAction::MediaPrevious);
+    }
+    if player.capabilities.can_control && player.capabilities.can_next {
+        actions.push(CandidateAction::MediaNext);
+    }
+    if player.capabilities.can_control && player.capabilities.can_seek {
+        actions.extend([
+            CandidateAction::MediaSeek(-10_000),
+            CandidateAction::MediaSeek(10_000),
+        ]);
+    }
+    let progress = (player.metadata.duration_micros > 0).then(|| {
+        let basis_points = player
+            .metadata
+            .position_micros
+            .saturating_mul(10_000)
+            .checked_div(player.metadata.duration_micros)
+            .unwrap_or_default();
+        Progress::from_basis_points(u16::try_from(basis_points).unwrap_or(10_000))
+    });
+    PresentationCandidate {
+        id: CandidateId::new("mpris.active").expect("static candidate identity"),
+        source: CandidateSource::Media,
+        kind: PresentationKind::Activity,
+        severity: Severity::Normal,
+        label: DisplayText::new(&label, 256),
+        accessible_label: DisplayText::new(
+            &format!("Media {}, {label}", player.status.label()),
+            512,
+        ),
+        created_at: now,
+        updated_at: now,
+        expires_at: None,
+        minimum_display: Duration::from_secs(2),
+        preemption: PreemptionClass::Passive,
+        progress,
+        actions,
+        output_affinity: None,
+    }
 }
 
 fn candidate_status_marks(

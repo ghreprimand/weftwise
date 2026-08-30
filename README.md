@@ -19,6 +19,9 @@ interaction model. It also contains the typed Phase 2 state core, direct
 Hyprland socket adapter, local workspace/context projections, and in-process
 clock fallback. The root also owns the Phase 3 deterministic presentation
 candidate arbiter and color-independent accessible Selvage projections.
+The Phase 4 slice discovers MPRIS players over the session bus, sanitizes media
+metadata, selects one active player deterministically, renders its progress and
+Ribbon label, and exposes only advertised transport actions.
 Corrected pointer delivery, stacking, and focus behavior remain unmeasured until
 the Hyprland/Waybar checklist passes.
 
@@ -100,6 +103,18 @@ reducer. Each immutable output projection has stable navigation, activity, and
 attention regions. Shape, width, fill pattern, visible text, and accessible
 labels distinguish selection and warnings without relying on color alone.
 Candidate actions remain typed data rather than command strings.
+
+The Phase 4 media slice installs MPRIS owner and property subscriptions before
+its initial bounded player snapshot. Playing players outrank paused and stopped
+players; stopped players expire after a bounded recent-activity interval, and
+unknown playback states are excluded. Player identity, title, artist, artwork
+URL, duration, and position are sanitized or clamped before root-state
+insertion. Artwork is not fetched. The selected player produces one activity
+mark and Ribbon label, while Play/Pause, Previous, Next, and relative seek
+controls are shown and dispatched only when the player advertises the required
+capability. Commands are pinned to the advertised unique-owner generation so a
+delayed action cannot control a restarted player. Player and session-bus
+restarts are handled independently with bounded retry.
 
 Claims in project documentation describe implemented behavior only when they
 are accompanied by verification. Planned behavior is labeled as planned.

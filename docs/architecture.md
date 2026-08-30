@@ -101,6 +101,28 @@ allows a bounded 100-millisecond grace for adapters to finish, and aborts only
 stragglers. This preserves prompt GTK shutdown without racing every cancellation
 receiver.
 
+### MPRIS ordering and ownership
+
+The MPRIS adapter creates its session-bus connection inside the entered Relm4
+Tokio runtime. It subscribes to `NameOwnerChanged` and player
+`PropertiesChanged` signals before listing players and publishing the initial
+snapshot. Unique-owner identity and a local owner generation map property
+signals and commands back to bounded well-known MPRIS names. A player restart
+replaces or removes only that player, and stale commands cannot cross the owner
+generation. Session-bus loss marks retained media state stale, removes its
+presentation candidate, and reconnects with bounded backoff without affecting
+other adapters.
+
+Raw D-Bus values do not enter GTK or root state. The adapter bounds player
+identity, title, artists, artwork URL, duration, position, and capabilities,
+then publishes complete typed player snapshots. Artwork URLs are retained only
+after scheme and length checks and are not fetched. Root state chooses playing,
+paused, then recently stopped players, excludes unknown playback states, and
+uses playback activity plus stable identity for ties. It derives one media
+candidate and capability-gated typed commands. Commands return through a
+bounded channel to the adapter and invoke explicit MPRIS methods; no shell
+strings are accepted.
+
 ## Surface model
 
 A surface manager owns one top-anchored overlay-layer surface per GDK output.

@@ -36,8 +36,10 @@ it open; leaving starts the dismissal timer.
 The Ribbon labels the selected context and exposes its actions. The implemented
 Hyprland projection shows the active workspace and bounded window title on the
 focused output, and uses a boundary-aligned local clock when compositor context
-is absent. A volume change
-selects audio temporarily. Media playback can show title and transport controls.
+is absent. A volume change selects audio temporarily. The implemented MPRIS
+projection shows bounded title and artist text for the selected player, with
+Previous, Play/Pause, Next, and 10-second seek controls present only when the
+player advertises each capability.
 A privacy event can replace ordinary content. The fallback is time, date,
 current workspace, and active application.
 
@@ -81,6 +83,13 @@ candidate sets select the same result independent of insertion order. Minimum
 display durations are bounded, expired candidates never remain sticky, stale
 producers are removed explicitly, and output-affine candidates are invisible on
 other outputs. When no stronger content is available, a fallback candidate wins.
+
+Media selection is deterministic: playing outranks paused, paused outranks
+recently stopped playback, playback activity wins within a state, and a stable
+MPRIS identity resolves remaining ties. Unknown playback states are not
+selected, and stopped state expires after 30 seconds. Duration and position are
+clamped before progress is projected. Disappearing players and session-bus loss
+remove stale media presentation rather than leaving old metadata selected.
 
 ## Multi-output behavior
 

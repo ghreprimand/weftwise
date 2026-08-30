@@ -12,7 +12,9 @@ use thiserror::Error;
 
 use crate::APPLICATION_ID;
 use crate::action::AppAction;
+use crate::context::arbitration::CandidateAction;
 use crate::message::{AppMessage, TimerKind};
+use crate::services::mpris::{self, MediaCommand, MediaCommandKind};
 use crate::services::{clock, hyprland};
 use crate::shell::outputs::{OutputChanges, ShellEvent, SurfaceError, SurfaceManager};
 use crate::shell::{ProofOptionError, ProofOptions};
@@ -53,6 +55,7 @@ struct AppModel {
     surfaces: Option<SurfaceManager>,
     timers: UiTimers,
     animation_watch: Option<AnimationPreferenceWatch>,
+    media_commands: tokio::sync::mpsc::Sender<MediaCommand>,
     shutting_down: bool,
 }
 
@@ -95,6 +98,18 @@ impl SimpleComponent for AppModel {
                 move |update| {
                     let _ = hyprland_sender.send(AppMessage::Hyprland(update));
                 },
+                cancellation,
+            )
+            .await;
+        });
+        let (media_commands, media_receiver) = mpris::command_channel();
+        let media_sender = sender.input_sender().clone();
+        supervisor.spawn_cancellable_adapter(move |cancellation| async move {
+            mpris::run(
+                move |update| {
+                    let _ = media_sender.send(AppMessage::Media(update));
+                },
+                media_receiver,
                 cancellation,
             )
             .await;
@@ -168,6 +183,7 @@ impl SimpleComponent for AppModel {
             surfaces,
             timers: UiTimers::default(),
             animation_watch,
+            media_commands,
             shutting_down: false,
         };
 
@@ -183,6 +199,10 @@ impl SimpleComponent for AppModel {
                 self.render_outputs(outputs);
             }
             AppMessage::Clock(tick) => self.handle_clock(tick),
+            AppMessage::Media(update) => {
+                let outputs = self.state.apply_media_update(update);
+                self.render_outputs(outputs);
+            }
             AppMessage::TimerElapsed {
                 output,
                 kind,
@@ -206,12 +226,47 @@ impl AppModel {
             AppAction::PointerLeft(output) => (output, InteractionInput::PointerLeft),
             AppAction::OpenPanel(output) => (output, InteractionInput::OpenPanel),
             AppAction::ClosePanel(output) => (output, InteractionInput::ClosePanel),
+            AppAction::Candidate(output, action) => {
+                self.handle_candidate_action(output, action);
+                return;
+            }
             AppAction::Quit => {
                 self.shutdown_owned();
                 return;
             }
         };
         self.apply_interaction(output, input, sender);
+    }
+
+    fn handle_candidate_action(&self, output: OutputId, action: CandidateAction) {
+        let advertised = self
+            .state
+            .output_view(output)
+            .is_some_and(|view| view.candidate_actions.contains(&action));
+        if !advertised {
+            return;
+        }
+        let Some(player) = self.state.selected_media_player(output) else {
+            return;
+        };
+        let kind = match action {
+            CandidateAction::MediaPlayPause => MediaCommandKind::PlayPause,
+            CandidateAction::MediaPrevious => MediaCommandKind::Previous,
+            CandidateAction::MediaNext => MediaCommandKind::Next,
+            CandidateAction::MediaSeek(delta) => MediaCommandKind::SeekMillis(delta),
+            CandidateAction::RevealDetails | CandidateAction::Dismiss => return,
+        };
+        if self
+            .media_commands
+            .try_send(MediaCommand {
+                player: player.id.clone(),
+                owner_generation: player.owner_generation,
+                kind,
+            })
+            .is_err()
+        {
+            tracing::warn!("MPRIS command queue unavailable or full");
+        }
     }
 
     fn handle_shell_event(&mut self, event: ShellEvent) {

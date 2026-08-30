@@ -9,6 +9,7 @@ repository = "https://github.com/ghreprimand/weftwise"
 publish = false
 
 [dependencies]
+futures-util = { version = "0.3.31", default-features = false, features = ["async-await"] }
 gtk4-layer-shell = "0.8.1"
 relm4 = { version = "0.11.0", default-features = false, features = ["gnome_42", "macros"] }
 serde = { version = "1.0.229", features = ["derive"] }

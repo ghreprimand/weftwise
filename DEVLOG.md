@@ -6,6 +6,47 @@ or unmeasured. Planned work is never presented as implemented behavior.
 
 ---
 
+## 2026-08-30 - Add bounded MPRIS media integration
+
+The independently supervised MPRIS adapter now opens its session-bus connection
+inside Relm4's Tokio runtime. It installs owner-change and player-property
+subscriptions before listing a bounded player set and publishing the initial
+snapshot. Signals are correlated through unique owners to bounded well-known
+player identities and owner generations. Player appearance, disappearance,
+property changes, and restarts refresh the affected player; session-bus loss
+marks retained state stale and reconnects with bounded jittered backoff.
+
+Raw D-Bus values are converted to typed snapshots before reaching root state.
+Player identity, display identity, title, artists, artwork URL, duration,
+position, playback state, and capabilities are sanitized or clamped. Root state
+selects playing, paused, then recently stopped players, excluding unknown
+playback states and using playback activity plus stable identity for
+deterministic ties. The selected player produces an activity mark, bounded
+progress, accessible Ribbon title/artist text, and only the transport actions
+its capabilities allow. Panel buttons emit typed Play/Pause, Previous, Next,
+and signed seek requests through a bounded channel. Each request carries the
+advertised owner generation, so a delayed action cannot target a restarted
+player. The adapter invokes explicit MPRIS methods without shell interpretation
+or GTK objects.
+
+### Verification
+
+- Focused media unit and contract tests cover malformed or extreme metadata,
+  stable multi-player selection, recent-state expiry, unknown playback state,
+  progress bounds, disappearing and restarting players, stale owner
+  generations, unsupported actions, session-bus loss state, and recovery.
+- `cargo test --locked`: passed 77 tests; zero failed or ignored.
+- The complete worktree gate passes with exact Rust 1.96.0 in the digest-pinned
+  Arch environment: formatting, deny-warning Clippy, 77 tests, documentation,
+  file-size and dependency-topology checks, public-safety automation, and
+  RustSec over 148 dependencies and 1,226 advisories.
+
+### Next
+
+- Validate the complete media milestone in a native Hyprland session beside
+  Waybar, including a real player and session-bus restart without retaining
+  media metadata in evidence.
+
 ## 2026-08-30 - Add deterministic context arbitration and accessible projections
 
 The root state now owns a pure presentation candidate arbiter. Candidates carry

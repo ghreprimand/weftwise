@@ -2,6 +2,7 @@
 
 use crate::action::AppAction;
 use crate::services::clock::ClockTick;
+use crate::services::mpris::MediaUpdate;
 use crate::shell::outputs::ShellEvent;
 use crate::state::{HyprlandUpdate, InteractionToken, OutputId};
 
@@ -25,6 +26,8 @@ pub enum AppMessage {
     Hyprland(HyprlandUpdate),
     /// Boundary-aligned in-process clock update.
     Clock(ClockTick),
+    /// Ordered state from the MPRIS session-bus adapter.
+    Media(MediaUpdate),
     /// A generation-checked interaction timer fired.
     TimerElapsed {
         /// Output that owns the timer.

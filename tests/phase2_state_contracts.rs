@@ -182,7 +182,7 @@ fn client_open_resolves_the_wire_workspace_name_to_stable_identity() {
 #[test]
 fn hostile_text_and_addresses_are_bounded_normalized_and_redacted() {
     let text = DisplayText::new("  alpha\n\u{0007}beta\t  ", 12);
-    assert_eq!(text.as_str(), "alphabeta");
+    assert_eq!(text.as_str(), "alpha beta");
     assert_eq!(format!("{text:?}"), "<redacted-text>");
 
     let output = output_name(&"x".repeat(128));

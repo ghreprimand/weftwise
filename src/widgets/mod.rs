@@ -9,7 +9,7 @@ use relm4::gtk::glib;
 use relm4::gtk::prelude::*;
 
 use crate::action::AppAction;
-use crate::context::arbitration::Severity;
+use crate::context::arbitration::{CandidateAction, Severity};
 use crate::state::{
     MarkPattern, MarkShape, OutputId, OutputView, PresentationLevel, StatusMark, WorkspaceMark,
 };
@@ -51,6 +51,7 @@ pub(crate) struct TopEdgeWidgets {
     attention_marks: gtk::Box,
     popover: gtk::Popover,
     first_panel_action: gtk::Button,
+    candidate_controls: Vec<(CandidateAction, gtk::Button)>,
 }
 
 impl TopEdgeWidgets {
@@ -147,6 +148,33 @@ impl TopEdgeWidgets {
         first_panel_action.set_focusable(true);
         panel_content.append(&first_panel_action);
 
+        let media_controls = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(6)
+            .accessible_role(gtk::AccessibleRole::Group)
+            .build();
+        let candidate_controls = [
+            (CandidateAction::MediaSeek(-10_000), "Back 10 seconds"),
+            (CandidateAction::MediaPrevious, "Previous"),
+            (CandidateAction::MediaPlayPause, "Play or pause"),
+            (CandidateAction::MediaNext, "Next"),
+            (CandidateAction::MediaSeek(10_000), "Forward 10 seconds"),
+        ]
+        .into_iter()
+        .map(|(action, label)| {
+            let button = gtk::Button::with_label(label);
+            button.set_focusable(true);
+            button.set_visible(false);
+            let action_emit = emit.clone();
+            button.connect_clicked(move |_| {
+                action_emit(AppAction::Candidate(output, action));
+            });
+            media_controls.append(&button);
+            (action, button)
+        })
+        .collect::<Vec<_>>();
+        panel_content.append(&media_controls);
+
         let close_button = gtk::Button::with_label("Close Panel");
         close_button.set_focusable(true);
         panel_content.append(&close_button);
@@ -214,6 +242,7 @@ impl TopEdgeWidgets {
             attention_marks,
             popover,
             first_panel_action,
+            candidate_controls,
         }
     }
 
@@ -248,6 +277,9 @@ impl TopEdgeWidgets {
         }
         for status in &view.attention {
             self.attention_marks.append(&status_mark(status));
+        }
+        for (action, button) in &self.candidate_controls {
+            button.set_visible(view.candidate_actions.contains(action));
         }
 
         if level == PresentationLevel::Panel {
