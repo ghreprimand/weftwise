@@ -64,6 +64,8 @@ codec round-trip are always available; the transport requires the
 - The complete default and feature gates pass with exact Rust 1.96.0 in the
   digest-pinned Arch environment against PipeWire 1.6.8, `libspa-0.2`, GTK
   4.22.4, and gtk4-layer-shell 1.3.0.
+- GitHub Actions run 33340784731 passed the repository gate for commit
+  `0aa89a4`.
 - Live adapter behavior, route mutation, and audio hardware validation remain
   unmeasured in this slice.
 
