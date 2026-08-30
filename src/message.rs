@@ -1,6 +1,7 @@
 //! Typed messages applied by the authoritative root model.
 
 use crate::action::AppAction;
+use crate::services::audio::AudioUpdate;
 use crate::services::clock::ClockTick;
 use crate::services::mpris::MediaUpdate;
 use crate::shell::outputs::ShellEvent;
@@ -28,6 +29,8 @@ pub enum AppMessage {
     Clock(ClockTick),
     /// Ordered state from the MPRIS session-bus adapter.
     Media(MediaUpdate),
+    /// Ordered state from the direct PipeWire audio adapter.
+    Audio(AudioUpdate),
     /// A generation-checked interaction timer fired.
     TimerElapsed {
         /// Output that owns the timer.

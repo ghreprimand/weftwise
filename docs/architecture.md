@@ -90,6 +90,33 @@ distinguished from capture by these transports and remain unsupported as
 separate detections. Any incomplete, ambiguous, disconnected, or gap-affected
 source remains unknown, unavailable, or stale rather than becoming inactive.
 
+## Audio control
+
+The audio domain is transport-independent typed state: bounded sink and source
+nodes with fixed-point linear volume, mute, availability, and per-node
+capabilities, plus the resolved default sink and source. The direct PipeWire
+adapter runs one supervisor-owned loop thread because `libpipewire` objects are
+neither `Send` nor `Sync`. It binds node and default-metadata globals, parses
+each node's `Props` parameter for channel volumes and mute, and resolves the
+default sink and source from the standard `default` metadata that WirePlumber
+owns. Initial registry changes remain private to the adapter until a PipeWire
+Core sync completes, then one bounded snapshot establishes root state before
+incremental updates are published. A Tokio task bridges typed commands into the
+loop thread and forwards typed updates back out; the retained command sender
+keeps that supervised transport alive. No `wpctl` subprocess is polled, and no
+`wireplumber` crate is used.
+
+Volume, mute, default-route, and move-stream commands are typed and
+capability-gated by the root before dispatch. A rejected request produces
+content-free error feedback rather than a silent failure. Volume and
+microphone-mute changes on the default nodes produce temporary feedback
+candidates through the shared emitter. The displayed volume percentage uses the
+conventional cubic mapping and remains display-only pending native
+verification; the pod codec that reads and writes volume is verified by a
+serialize/parse round-trip, while live-server behavior is unmeasured. The
+adapter and its optional `pipewire` dependency compile only with the
+`audio-transport` feature; the pure domain and typed contracts build without it.
+
 ## Temporary feedback
 
 Temporary feedback confirms a discrete change: a volume or brightness step, a

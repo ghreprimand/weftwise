@@ -6,6 +6,73 @@ or unmeasured. Planned work is never presented as implemented behavior.
 
 ---
 
+## 2026-08-30 - Add the direct PipeWire audio adapter and typed audio control
+
+A transport-independent audio domain now models bounded sink and source nodes
+with fixed-point linear volume, mute, availability, and per-node capabilities,
+plus the resolved default sink and source. Snapshots are node-count bounded,
+untrusted names are length-clamped, volume is clamped and finite, and unknown
+default identities are dropped. Removing a node clears any default that
+referenced it, and a failed transport downgrades retained state to stale rather
+than a false empty inactive.
+
+Typed volume, mute, toggle-mute, default-route, and move-stream commands are
+capability-gated by the root before dispatch. A rejected request emits
+content-free error feedback through the shared emitter; volume and
+microphone-mute changes on the default nodes emit temporary volume and
+microphone feedback.
+
+The direct PipeWire adapter runs one supervisor-owned loop thread, because
+`libpipewire` objects are neither `Send` nor `Sync`. It binds node and
+default-metadata globals, subscribes to each node's `Props` parameter, parses
+channel volumes and mute from the SPA pod, and resolves the default sink and
+source from the standard `default` metadata that WirePlumber owns. A Tokio task
+bridges typed commands into the loop thread and forwards typed updates out. The
+root retains the command sender for the adapter's lifetime. Registry changes
+remain buffered until PipeWire Core sync completes and one bounded initial
+snapshot is published; only then does the adapter publish deltas and reset its
+bounded exponential reconnect backoff. Cancellation remains owned. No `wpctl`
+subprocess is polled, no `wireplumber` crate is linked, and the project contains
+no `unsafe` code. Default and stream routing through the WirePlumber-owned
+policy metadata is reported as a transport limitation pending native verification
+rather than claimed as complete.
+
+The optional `pipewire` dependency and the adapter compile only behind a new
+`audio-transport` Cargo feature. The pure domain, typed contracts, and SPA pod
+codec round-trip are always available; the transport requires the
+`libpipewire-0.3` and `libspa-0.2` development headers and `clang`.
+
+### Verification
+
+- New audio unit tests cover volume clamping and finiteness, cubic display
+  bounds, snapshot node bounds and unknown-default filtering, default clearing
+  on node removal, wrong-direction and unknown-node command rejection,
+  capability-gated control, stale/unavailable semantics, and content-free error
+  reasons. The SPA `Props` pod build/parse round-trip is verified under the
+  feature.
+- A stricter tester contract for feedback TTL expiry was found failing against
+  the landed `flush_feedback`; it now advances the arbitration clock so an
+  elapsed TTL is released even with no pending event. The Phase 5 privacy and
+  feedback contract suite passes.
+- Default gate: formatting, deny-warning Clippy, 104 tests, documentation,
+  file-size and dependency-topology checks (no second async runtime),
+  public-safety automation, and RustSec over 172 locked dependencies. The root
+  state file is 1,662 lines after audio, media, and context integration moved to
+  retained submodules; the audio adapter is 1,335 lines.
+- Feature gate (`--features audio-transport`): deny-warning Clippy, 105 tests
+  including the pod round-trip, and documentation all pass.
+- The complete default and feature gates pass with exact Rust 1.96.0 in the
+  digest-pinned Arch environment against PipeWire 1.6.8, `libspa-0.2`, GTK
+  4.22.4, and gtk4-layer-shell 1.3.0.
+- Live adapter behavior, route mutation, and audio hardware validation remain
+  unmeasured in this slice.
+
+### Next
+
+- Verify volume, mute, default-route, and move-stream against a live PipeWire
+  and WirePlumber session without recording or committing real device names.
+- Wire Panel-driven audio actions and render audio state in the interface.
+
 ## 2026-08-30 - Add Phase 5 privacy and temporary-feedback domain
 
 A new privacy evidence domain models microphone, camera, screen-sharing,

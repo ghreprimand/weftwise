@@ -125,7 +125,12 @@ The documented native baseline is OdysseyOS/Arch with `base-devel`, `rustup`,
 `gtk4`, `gtk4-layer-shell`, and `pipewire`. The selected audio boundary uses
 direct PipeWire registry and metadata APIs while the installed WirePlumber
 service remains the policy owner; Weftwise does not link a WirePlumber Rust
-binding. See
+binding. The PipeWire audio transport is compiled behind the optional
+`audio-transport` Cargo feature, which enables the `pipewire` dependency and
+requires the `libpipewire-0.3` and `libspa-0.2` development headers plus
+`clang` for binding generation. The default build and every repository gate
+run without that feature; the pure audio domain and typed contracts are always
+built and tested. See
 [building and validation](docs/building.md) for package checks, configuration
 locations, runtime limits, and repository gates.
 

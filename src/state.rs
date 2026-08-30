@@ -10,9 +10,13 @@ use crate::context::arbitration::{
     PreemptionClass, PresentationCandidate, PresentationKind, PresentationProjection, Progress,
     Severity, Timestamp,
 };
-use crate::context::feedback::{FeedbackEmitter, FeedbackEvent, FeedbackKind};
-use crate::context::privacy::{PrivacyDomain, PrivacyUpdate};
-use crate::services::mpris::MediaUpdate;
+use crate::context::feedback::FeedbackEmitter;
+use crate::context::privacy::PrivacyDomain;
+use crate::services::audio::AudioState;
+
+mod audio_integration;
+mod context_integration;
+mod media_integration;
 
 /// Delay before a pointer at the top edge reveals the Ribbon.
 pub const DWELL_DELAY: Duration = Duration::from_millis(240);
@@ -880,6 +884,8 @@ pub struct AppState {
     pub media: MediaState,
     /// Root-owned privacy evidence domain state.
     pub privacy: PrivacyDomain,
+    /// Root-owned PipeWire audio domain state.
+    pub audio: AudioState,
     feedback: FeedbackEmitter,
     clock_label: String,
     arbitration: Arbitrator,
@@ -979,151 +985,6 @@ impl AppState {
                 };
             }
         }
-        self.output_ids().collect()
-    }
-
-    /// Apply one ordered MPRIS update and refresh its arbitration candidate.
-    pub fn apply_media_update(&mut self, update: MediaUpdate) -> Vec<OutputId> {
-        let observed_millis = match update {
-            MediaUpdate::Connecting => {
-                self.media.availability = if self.media.players.is_empty() {
-                    AdapterAvailability::Starting
-                } else {
-                    AdapterAvailability::Stale
-                };
-                return Vec::new();
-            }
-            MediaUpdate::Snapshot {
-                players,
-                observed_millis,
-            } => {
-                self.media.players = players
-                    .into_iter()
-                    .take(32)
-                    .map(|player| (player.id.clone(), player))
-                    .collect();
-                self.media.availability = AdapterAvailability::Ready;
-                observed_millis
-            }
-            MediaUpdate::PlayerChanged {
-                player,
-                observed_millis,
-            } => {
-                if self.media.players.len() < 32 || self.media.players.contains_key(&player.id) {
-                    self.media.players.insert(player.id.clone(), player);
-                }
-                self.media.availability = AdapterAvailability::Ready;
-                observed_millis
-            }
-            MediaUpdate::PlayerRemoved {
-                id,
-                observed_millis,
-            } => {
-                self.media.players.remove(&id);
-                observed_millis
-            }
-            MediaUpdate::Tick { observed_millis } => observed_millis,
-            MediaUpdate::Unavailable => {
-                self.media.availability = if self.media.players.is_empty() {
-                    AdapterAvailability::Unavailable
-                } else {
-                    AdapterAvailability::Stale
-                };
-                self.media.active = None;
-                return self.apply_arbitration(
-                    ArbitrationInput::SourceStale(CandidateSource::Media),
-                    self.arbitration_now,
-                );
-            }
-        };
-
-        self.media.active = select_active_player(&self.media.players, observed_millis)
-            .map(|player| player.id.clone());
-        let observed_millis =
-            observed_millis.max(self.arbitration_now.as_millis().saturating_add(1));
-        let now = Timestamp::from_millis(observed_millis);
-        self.arbitration_now = now;
-        if let Some(player) = self.active_media_player() {
-            self.arbitration
-                .apply(ArbitrationInput::Upsert(media_candidate(player, now)), now);
-        } else {
-            self.arbitration
-                .apply(ArbitrationInput::SourceStale(CandidateSource::Media), now);
-        }
-        self.refresh_arbitration_selections();
-        self.output_ids().collect()
-    }
-
-    /// Return the selected media player for a capability-gated output action.
-    #[must_use]
-    pub fn selected_media_player(&self, output: OutputId) -> Option<&MediaPlayer> {
-        let selected = self.selected_candidates.get(&output)?;
-        (selected.source == CandidateSource::Media)
-            .then(|| self.active_media_player())
-            .flatten()
-    }
-
-    fn active_media_player(&self) -> Option<&MediaPlayer> {
-        self.media
-            .active
-            .as_ref()
-            .and_then(|id| self.media.players.get(id))
-    }
-
-    /// Apply one privacy observation and republish privacy candidates.
-    ///
-    /// The privacy domain is republished as a whole: stale `Privacy`-source
-    /// candidates are cleared and the current supported evidence is upserted,
-    /// so a source that stops being active no longer lingers in arbitration.
-    pub fn apply_privacy_update(
-        &mut self,
-        update: PrivacyUpdate,
-        observed_millis: u64,
-    ) -> Vec<OutputId> {
-        let now = self.advance_now(observed_millis);
-        self.privacy.apply(update, now);
-        self.arbitration
-            .apply(ArbitrationInput::SourceStale(CandidateSource::Privacy), now);
-        for candidate in self.privacy.candidates(now) {
-            self.arbitration
-                .apply(ArbitrationInput::Upsert(candidate), now);
-        }
-        self.refresh_arbitration_selections();
-        self.output_ids().collect()
-    }
-
-    /// Offer one temporary feedback event to the rate-limited emitter.
-    pub fn apply_feedback(&mut self, event: FeedbackEvent, observed_millis: u64) -> Vec<OutputId> {
-        let now = self.advance_now(observed_millis);
-        if let Some(input) = self.feedback.offer(event, now) {
-            self.arbitration.apply(input, now);
-            self.refresh_arbitration_selections();
-            self.output_ids().collect()
-        } else {
-            Vec::new()
-        }
-    }
-
-    /// Flush any coalesced feedback whose rate-limit interval has elapsed.
-    pub fn flush_feedback(&mut self, observed_millis: u64) -> Vec<OutputId> {
-        let now = self.advance_now(observed_millis);
-        let inputs = self.feedback.flush(now);
-        if inputs.is_empty() {
-            return Vec::new();
-        }
-        for input in inputs {
-            self.arbitration.apply(input, now);
-        }
-        self.refresh_arbitration_selections();
-        self.output_ids().collect()
-    }
-
-    /// Explicitly dismiss one temporary feedback candidate.
-    pub fn dismiss_feedback(&mut self, kind: FeedbackKind, observed_millis: u64) -> Vec<OutputId> {
-        let now = self.advance_now(observed_millis);
-        let input = self.feedback.dismiss(kind);
-        self.arbitration.apply(input, now);
-        self.refresh_arbitration_selections();
         self.output_ids().collect()
     }
 

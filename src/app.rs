@@ -14,6 +14,8 @@ use crate::APPLICATION_ID;
 use crate::action::AppAction;
 use crate::context::arbitration::CandidateAction;
 use crate::message::{AppMessage, TimerKind};
+#[cfg(feature = "audio-transport")]
+use crate::services::audio::AudioCommand;
 use crate::services::mpris::{self, MediaCommand, MediaCommandKind};
 use crate::services::{clock, hyprland};
 use crate::shell::outputs::{OutputChanges, ShellEvent, SurfaceError, SurfaceManager};
@@ -56,6 +58,8 @@ struct AppModel {
     timers: UiTimers,
     animation_watch: Option<AnimationPreferenceWatch>,
     media_commands: tokio::sync::mpsc::Sender<MediaCommand>,
+    #[cfg(feature = "audio-transport")]
+    _audio_commands: tokio::sync::mpsc::Sender<AudioCommand>,
     shutting_down: bool,
 }
 
@@ -114,6 +118,22 @@ impl SimpleComponent for AppModel {
             )
             .await;
         });
+        #[cfg(feature = "audio-transport")]
+        let audio_commands = {
+            let (audio_commands, audio_receiver) = crate::services::audio::command_channel();
+            let audio_sender = sender.input_sender().clone();
+            supervisor.spawn_cancellable_adapter(move |cancellation| async move {
+                crate::services::audio::run(
+                    move |update| {
+                        let _ = audio_sender.send(AppMessage::Audio(update));
+                    },
+                    audio_receiver,
+                    cancellation,
+                )
+                .await;
+            });
+            audio_commands
+        };
         let clock_sender = sender.input_sender().clone();
         supervisor.spawn_cancellable_adapter(move |cancellation| async move {
             clock::run(
@@ -184,6 +204,8 @@ impl SimpleComponent for AppModel {
             timers: UiTimers::default(),
             animation_watch,
             media_commands,
+            #[cfg(feature = "audio-transport")]
+            _audio_commands: audio_commands,
             shutting_down: false,
         };
 
@@ -201,6 +223,10 @@ impl SimpleComponent for AppModel {
             AppMessage::Clock(tick) => self.handle_clock(tick),
             AppMessage::Media(update) => {
                 let outputs = self.state.apply_media_update(update);
+                self.render_outputs(outputs);
+            }
+            AppMessage::Audio(update) => {
+                let outputs = self.state.apply_audio_update(update);
                 self.render_outputs(outputs);
             }
             AppMessage::TimerElapsed {
