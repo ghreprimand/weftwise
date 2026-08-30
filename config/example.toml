@@ -1,0 +1,5 @@
+# Synthetic public-safe example. Unknown keys are rejected.
+schema_version = 1
+
+# Omit this setting to follow GTK's animation preference.
+reduced_motion = false

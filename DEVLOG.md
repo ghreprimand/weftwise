@@ -6,6 +6,65 @@ or unmeasured. Planned work is never presented as implemented behavior.
 
 ---
 
+## 2026-08-30 - Add the Phase 0 Rust scaffold
+
+The repository now contains a Rust 2024 crate with the retained application,
+domain, adapter, surface, arbitration, and Relm4 presentation boundaries. The
+initial hidden root component does not create a layer surface or product UI.
+Relm4's shared Tokio runtime is bounded to one asynchronous worker and four
+blocking workers before first use. The supervisor owns spawned adapter handles
+and constructs adapter futures inside the entered runtime.
+
+The lockfile resolves Relm4 0.11, gtk4-layer-shell 0.8, one gtk4-rs 0.11 line,
+one Tokio 1.53 line, zbus 5 with its Tokio backend, serde/TOML, tracing, and
+`thiserror`. Rust 1.96.0 and a 1.96 Cargo MSRV are pinned as the project pair.
+An isolated Arch `base-devel` environment completed the full locked gate with
+Rust 1.96.0. The available Rust 1.97.1 compiler also passed the same gate.
+
+Versioned configuration parsing rejects unknown keys, invalid values, and
+unsupported schemas. XDG configuration, cache, state, and runtime paths are
+resolved without logging their values. Runtime absence remains explicit.
+Private directory and file modes are defined as `0700` and `0600`, and default
+diagnostic policy redacts user paths, desktop text, content metadata, and
+process arguments.
+
+Local and Linux CI gates now cover formatting, deny-warning Clippy, locked
+tests, documentation, dependency topology, production Rust file size,
+public-safety checks, and RustSec. Worktree safety uses an isolated temporary
+Git index and does not change the real staging index. Test fixtures are required
+to contain synthetic public-safe data.
+
+### Verification
+
+- `pkg-config --modversion gtk4 gtk4-layer-shell-0`: passed; the reference
+  environment reported GTK4 4.22.4 and gtk4-layer-shell 1.3.0.
+- `bash .github/scripts/check.sh --tree`: passed under Rust 1.96.0 in an
+  isolated Arch `base-devel` environment against the shared lockfile and
+  supported native-library baseline. This included formatting, deny-warning
+  Clippy, 15 tests, documentation, topology, file size, public-safety, and
+  RustSec.
+- `cargo fmt --check`: passed with Rust 1.97.1.
+- `cargo clippy --all-targets --locked -- -D warnings`: passed with Rust 1.97.1.
+- `cargo test --locked`: passed 15 tests; zero failed, ignored, or measured.
+- `cargo doc --no-deps --locked`: passed.
+- Dependency topology: one gtk4-rs version (`0.11.4`), one Tokio version
+  (`1.53.1`), no GTK3 binding, and no second async runtime detected.
+- Production Rust file-size gate: passed; every file is below 2,000 lines.
+- `bash .github/scripts/public-safety.sh --worktree`: passed; manual review is
+  still required before any landing.
+- `cargo audit --deny warnings --file Cargo.lock`: passed while scanning 147
+  dependencies against 1,226 loaded RustSec advisories.
+- Shell syntax validation for repository scripts: passed.
+- Linux CI: configured but unmeasured until a workflow run occurs.
+- Native layer-shell behavior, input regions, output ownership, focus, and
+  Waybar coexistence: unimplemented and unmeasured.
+
+### Next
+
+- Select the project license in a separate complete landing.
+- Implement and measure the native Selvage, Ribbon, and Panel proof beside
+  Waybar.
+
 ## 2026-08-30 - Replace vague product language
 
 The README and interface documents now describe dimensions, states, triggers,

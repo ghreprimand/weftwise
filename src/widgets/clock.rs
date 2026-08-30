@@ -1,0 +1,1 @@
+//! Clock presentation projection.

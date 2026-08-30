@@ -1,0 +1,1 @@
+//! Interactive Panel component boundary.

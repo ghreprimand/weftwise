@@ -45,6 +45,10 @@ application names, and non-identifying paths.
 Before a push, inspect the commit author, committer, complete message, and final
 diff again. Publishing requires explicit maintainer authorization.
 
+During development, `bash .github/scripts/public-safety.sh --worktree` scans
+tracked and untracked non-ignored files through an isolated temporary Git index.
+CI uses `--tree`. Neither mode changes the real staging index.
+
 ## Public prose and evidence
 
 Documentation and commit history describe what changed and why. They do not

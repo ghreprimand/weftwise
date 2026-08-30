@@ -12,9 +12,10 @@ and expands when used. It starts alongside Waybar. Planned features include
 workspace navigation, activity progress, privacy indicators, temporary system
 feedback, and system controls.
 
-The project is pre-alpha. The repository currently contains design,
-architecture, and repository-safety documentation. There is no runnable
-application.
+The project is pre-alpha. The repository contains a buildable Rust/Relm4
+scaffold and the design, architecture, and repository-safety documentation.
+The executable initializes a hidden root component, but no layer surface or
+product interface is implemented yet.
 
 ## Interface model
 
@@ -55,7 +56,13 @@ actions. See [the architecture overview](docs/architecture.md) and the
 
 ## Development status
 
-Phase 0 requires:
+The Phase 0 repository baseline now includes the retained module boundaries, a
+locked dependency graph, bounded Relm4 runtime settings, versioned XDG
+configuration types, redacted diagnostic defaults, and local/CI validation
+scripts. Rust 1.96.0 is the pinned project toolchain and has passed the complete
+locked gate on the supported Arch native-library baseline.
+
+The next native proof requires:
 
 1. one non-exclusive top-edge surface per output;
 2. a 2-3 pixel pointer-active Selvage with click-through transparent space;
@@ -66,6 +73,14 @@ Phase 0 requires:
 
 Claims in project documentation describe implemented behavior only when they
 are accompanied by verification. Planned behavior is labeled as planned.
+
+## Building the scaffold
+
+The documented native baseline is OdysseyOS/Arch with `base-devel`, `rustup`,
+`gtk4`, and `gtk4-layer-shell`. PipeWire and WirePlumber development packages
+are deferred until their integration boundary is selected. See
+[building and validation](docs/building.md) for package checks, configuration
+locations, runtime limits, and repository gates.
 
 ## Contributing and security
 
@@ -84,6 +99,7 @@ and unsanitized runtime captures.
 
 - [Interface model](docs/interface-model.md)
 - [Architecture](docs/architecture.md)
+- [Building and validation](docs/building.md)
 - [Project scaffolding](scaffolding.md)
 - [Public repository safety](docs/public-repository-safety.md)
 - [Development log](DEVLOG.md)

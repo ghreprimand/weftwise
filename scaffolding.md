@@ -6,6 +6,12 @@ This document records the product and implementation decisions used to scaffold
 the public repository. Implemented behavior, once present, takes precedence over
 planned behavior and must remain synchronized with this document.
 
+The Phase 0 repository baseline is implemented: the locked Rust/Relm4 scaffold,
+retained module tree, bounded runtime settings, versioned XDG configuration
+types, and repository gates are present. Rust 1.96.0 is pinned and the complete
+locked gate passes under that exact compiler on the supported Arch baseline. No
+layer surface or product interface is implemented.
+
 ## Name
 
 **Weftwise** is a textile term meaning “in the direction of the weft”: horizontally across a piece of fabric, from selvage to selvage. The name fits a horizontal desktop surface spanning the screen while also suggesting a system that is context-aware or “wise” about what it displays.
@@ -240,7 +246,22 @@ components do not replace the domain, adapter, or surface ownership layers.
 
 ## Phased implementation
 
-### Phase 0 — Native shell proof
+### Phase 0 - Repository and dependency baseline
+
+- Resolve and lock the GTK4, Relm4, layer-shell, Tokio, zbus, serialization,
+  tracing, and error-handling dependency graph.
+- Pin the candidate toolchain/MSRV pair in lockstep and verify it under the
+  exact declared compiler before calling the floor supported.
+- Retain the application, state, message, action, configuration, supervisor,
+  shell, service, arbitration, and widget module boundaries.
+- Bound shared runtime workers before first use and keep zbus construction
+  inside the entered Tokio runtime.
+- Define versioned XDG paths, private file modes, redacted diagnostics, and
+  synthetic fixture policy.
+- Run formatting, linting, tests, documentation, dependency topology, RustSec,
+  file-size, and public-safety gates locally and in Linux CI.
+
+### Phase 1 - Native shell proof
 
 - Initialize the Rust project and development tooling.
 - Open one GTK4 layer-shell surface per output.
@@ -251,7 +272,7 @@ components do not replace the domain, adapter, or surface ownership layers.
 - Verify pointer pass-through, dwell reveal, dismissal, focus restoration,
   reduced motion, and stacking behavior while Waybar is running.
 
-### Phase 1 — Contextual Ribbon and Panel
+### Phases 2-4 - Contextual Ribbon and Panel
 
 - Add typed application state and message flow.
 - Connect to Hyprland's event socket and reconcile initial state.
@@ -262,7 +283,7 @@ components do not replace the domain, adapter, or surface ownership layers.
 - Add click-to-open Panel behavior and a Hyprland keybinding entry point.
 - Handle Hyprland and media-player restarts without restarting Weftwise.
 
-### Phase 2 — System feedback
+### Phase 5 - System feedback
 
 - Volume and microphone state through PipeWire/WirePlumber.
 - Temporary volume and brightness OSDs.
@@ -270,7 +291,16 @@ components do not replace the domain, adapter, or surface ownership layers.
 - Timers and supervised process/build progress.
 - Notification summaries where useful.
 
-### Phase 3 — Daily-use hardening
+### Phase 6 - Activities, workflow mode, and system health
+
+- A versioned, size-bounded local event protocol for timers and tracked work.
+- Explicit program-and-argument process supervision with cancellation and
+  output bounds.
+- OdysseyOS workflow profile state behind an adapter boundary.
+- Threshold-based in-process system health sampling without permanent exact
+  value labels.
+
+### Phases 7 and 9 - Daily-use tools and hardening
 
 - Multi-monitor hotplug, scale-change, renaming, and lifecycle hardening.
 - Configuration loading and live theme reload where safe.
@@ -278,7 +308,7 @@ components do not replace the domain, adapter, or surface ownership layers.
 - Quick settings and richer media controls.
 - Performance, accessibility, reconnection, and lifecycle hardening.
 
-### Phase 4 — Incremental Waybar replacement
+### Phase 8 - Incremental Waybar replacement
 
 - Native workspaces and window controls.
 - Battery, power, connectivity, and audio controls.

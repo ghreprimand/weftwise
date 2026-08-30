@@ -80,6 +80,13 @@ Configuration is versioned TOML loaded from
 directories. Unknown keys produce useful diagnostics; invalid user values do
 not silently replace valid defaults.
 
+Cache and persistent state use the corresponding XDG cache and state bases.
+Per-login sockets or transient state require `XDG_RUNTIME_DIR`; absence is an
+explicit unavailable state rather than a fallback to a shared temporary
+directory. Application directories and private files use modes `0700` and
+`0600` respectively when writers are introduced. Default diagnostics redact
+user paths, desktop text, content metadata, and process arguments.
+
 GTK CSS uses semantic tokens for backgrounds, surfaces, text, accent, warning,
 critical state, spacing, radii, and motion. User CSS cannot alter protocol or
 action-dispatch safety boundaries.

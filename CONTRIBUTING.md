@@ -29,7 +29,7 @@ Large feature proposals should first establish:
   `cargo clippy --all-targets --locked -- -D warnings`, and
   `cargo test --locked`. Full test output is retained in an ignored local log.
   Dependency, parser, transport, input, storage, and release changes also run
-  the repository's RustSec audit script once it exists.
+  the repository's RustSec audit script.
 - **Platform truthfulness:** Linux on native Wayland with Hyprland is the only
   supported platform. Behavior on another compositor is never inferred from
   Hyprland results, and unsupported environments remain explicitly labeled.
@@ -82,3 +82,11 @@ A change should include:
 
 Security vulnerabilities must follow [SECURITY.md](SECURITY.md) and must not be
 opened as public issues or pull requests.
+
+## Scaffold validation
+
+The native package baseline, pinned toolchain status, runtime bounds, XDG
+locations, and complete local command are documented in
+[building and validation](docs/building.md). The gate retains full output under
+the ignored `target/gate-logs` directory. `cargo-audit` must be installed for
+dependency, parser, transport, input, storage, or release work.

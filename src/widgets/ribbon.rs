@@ -1,0 +1,1 @@
+//! Revealed Ribbon component boundary.

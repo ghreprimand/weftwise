@@ -1,0 +1,26 @@
+[package]
+name = "weftwise"
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.96"
+description = "A minimal top-edge desktop interface for OdysseyOS and Hyprland"
+repository = "https://github.com/ghreprimand/weftwise"
+publish = false
+
+[dependencies]
+gtk4-layer-shell = "0.8.1"
+relm4 = { version = "0.11.0", default-features = false, features = ["gnome_42", "macros"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+thiserror = "2.0.17"
+tokio = { version = "1.53.0", default-features = false, features = ["net", "process", "signal", "sync", "time"] }
+toml = "1.1.4"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
+zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "deny"
