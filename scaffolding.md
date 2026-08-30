@@ -372,6 +372,8 @@ The first milestone is complete when:
 - Pin the Rust toolchain and `Cargo.toml` MSRV in lockstep after the dependency
   set is compiled and the actual minimum is verified.
 
-## Remaining project decision
+## Licensing decision
 
-- Select and document the license before the first public source publication.
+- Weftwise source and documentation use `GPL-3.0-only`.
+- Contributions use the Developer Certificate of Origin 1.1 instead of a
+  Contributor License Agreement.

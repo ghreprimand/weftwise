@@ -18,6 +18,66 @@ Large feature proposals should first establish:
 - their keyboard and reduced-motion behavior; and
 - why existing typed state and actions cannot express them.
 
+## Developer Certificate of Origin
+
+Weftwise uses the Developer Certificate of Origin 1.1 instead of a Contributor
+License Agreement. A commit sign-off certifies that the contributor wrote the
+patch or has the right to submit it under the project's license.
+
+Sign off a commit with `-s`:
+
+```sh
+git commit -s -m "your commit message"
+```
+
+This appends a line in this form:
+
+```text
+Signed-off-by: Contributor Name <123456+contributor@users.noreply.github.com>
+```
+
+The sign-off identity must match the commit author. Contributions are accepted
+under **GPL-3.0-only**, and contributors retain copyright in their work.
+
+The complete DCO 1.1 text follows:
+
+```text
+Developer Certificate of Origin
+Version 1.1
+
+Copyright (C) 2004, 2006 The Linux Foundation and its contributors.
+
+Everyone is permitted to copy and distribute verbatim copies of this
+license document, but changing it is not allowed.
+
+
+Developer's Certificate of Origin 1.1
+
+By making a contribution to this project, I certify that:
+
+(a) The contribution was created in whole or in part by me and I
+    have the right to submit it under the open source license
+    indicated in the file; or
+
+(b) The contribution is based upon previous work that, to the best
+    of my knowledge, is covered under an appropriate open source
+    license and I have the right under that license to submit that
+    work with modifications, whether created in whole or in part
+    by me, under the same open source license (unless I am
+    permitted to submit under a different license), as indicated
+    in the file; or
+
+(c) The contribution was provided directly to me by some other
+    person who certified (a), (b) or (c) and I have not modified
+    it.
+
+(d) I understand and agree that this project and the contribution
+    are public and that a record of the contribution (including all
+    personal information I submit with it, including my sign-off) is
+    maintained indefinitely and may be redistributed consistent with
+    this project or the open source license(s) involved.
+```
+
 ## Standing engineering gates
 
 - **Behavior preservation:** changes are externally behavior-neutral unless

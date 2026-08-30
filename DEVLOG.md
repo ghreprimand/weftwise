@@ -6,6 +6,28 @@ or unmeasured. Planned work is never presented as implemented behavior.
 
 ---
 
+## 2026-08-30 - Adopt GPL-3.0-only
+
+The repository now licenses Weftwise under GPL-3.0-only, matching OdyTTY. Cargo
+metadata and the README identify the license, and the canonical GPL version 3
+text is tracked in `LICENSE`. Contributions use the Developer Certificate of
+Origin 1.1 instead of a Contributor License Agreement; contributors retain
+copyright in their work.
+
+### Verification
+
+- The first worktree gate passed 17 tests, then the public-safety check rejected
+  a non-allowlisted instructional email placeholder. The example now uses the
+  synthetic GitHub no-reply address format.
+- `bash .github/scripts/check.sh --worktree`: passed with Rust 1.97.1 and 17
+  tests; zero failed, ignored, or measured.
+- The same complete tree gate passed with Rust 1.96.0 in the digest-pinned Arch
+  environment.
+- The tracked `LICENSE` file is byte-for-byte identical to OdyTTY's canonical
+  GPL version 3 license text.
+- README, Cargo metadata, and contribution terms consistently identify
+  `GPL-3.0-only`.
+
 ## 2026-08-30 - Harden Phase 0 CI inputs
 
 The Linux gate now starts from a reviewed Arch `base-devel` image digest instead

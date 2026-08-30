@@ -163,3 +163,18 @@ fn ci_workflow_keeps_immutable_and_non_persistent_inputs() {
         }
     }
 }
+
+#[test]
+fn public_license_terms_remain_consistent() {
+    let manifest = include_str!("../Cargo.toml");
+    let readme = include_str!("../README.md");
+    let contributing = include_str!("../CONTRIBUTING.md");
+    let license = include_str!("../LICENSE");
+
+    assert!(manifest.contains("license = \"GPL-3.0-only\""));
+    assert!(readme.contains("licensed under **GPL-3.0-only**"));
+    assert!(contributing.contains("under **GPL-3.0-only**"));
+    assert!(contributing.contains("Developer Certificate of Origin 1.1"));
+    assert!(license.contains("GNU GENERAL PUBLIC LICENSE"));
+    assert!(license.contains("Version 3, 29 June 2007"));
+}

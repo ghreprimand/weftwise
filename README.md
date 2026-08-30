@@ -108,6 +108,6 @@ and unsanitized runtime captures.
 
 ## License
 
-No license has been selected yet. Until a license is added, the source and
-documentation remain protected by their respective copyright holders and are
-not granted for reuse or redistribution.
+Weftwise is licensed under **GPL-3.0-only**. The source may be used, studied,
+shared, and modified under that license; distributed modifications must use the
+same license. See [LICENSE](LICENSE).
