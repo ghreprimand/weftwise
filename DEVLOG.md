@@ -75,6 +75,8 @@ Synchronous shutdown broadcasts cancellation, waits for a bounded
   runtime and one gtk4-rs line. The complete worktree gate passes with the exact
   Rust 1.96.0 toolchain, including formatting, deny-warning Clippy, 50 tests,
   documentation, dependency topology, public-safety automation, and RustSec.
+- GitHub Actions run `33316075710` passed the same repository gate for commit
+  `dd8c300` after the Phase 2 landing was pushed.
 - Synthetic tests cover structured snapshots, first-delimiter event parsing,
   unknown and malformed events, bounded event buffering and ordered replay,
   unsafe instance leaves, redacted errors, atomic reducer updates, local output
