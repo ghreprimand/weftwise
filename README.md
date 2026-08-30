@@ -5,32 +5,30 @@
 [Issues](https://github.com/ghreprimand/weftwise/issues) |
 [Security](SECURITY.md)
 
-**A quiet, contextual desktop surface for OdysseyOS and Hyprland.**
+**A minimal top-edge desktop interface for OdysseyOS and Hyprland.**
 
-Weftwise is a native Wayland interface that replaces a permanently crowded
-status bar with an ambient top edge. It starts as a companion to Waybar and is
-intended to grow into a cohesive home for workspace navigation, current
-activity, privacy state, transient system feedback, and focused controls.
+Weftwise is a native Wayland top bar that keeps a 2-3 pixel status line visible
+and expands when used. It starts alongside Waybar. Planned features include
+workspace navigation, activity progress, privacy indicators, temporary system
+feedback, and system controls.
 
-The project is pre-alpha. The repository currently contains the product,
-interaction, architecture, and public-safety foundation. There is no runnable
-application yet.
+The project is pre-alpha. The repository currently contains design,
+architecture, and repository-safety documentation. There is no runnable
+application.
 
 ## Interface model
 
 Weftwise uses three levels of presentation:
 
-- **Selvage:** a persistent 2-3 pixel line at the top edge. It communicates
-  workspace position, current activity, and exceptional system state without
-  reserving vertical space.
-- **Ribbon:** a compact labeled surface revealed by deliberate pointer intent
-  at the top edge. It provides exact context and immediate controls.
+- **Selvage:** a persistent 2-3 pixel line at the top edge. Marks show workspace
+  position, active progress, and warnings without reserving vertical space.
+- **Ribbon:** a compact labeled bar revealed by holding the pointer against the
+  top edge. It provides labels, values, and immediate controls.
 - **Panel:** an interactive view opened by click or a Hyprland binding for
   navigation, search, media, calendar, quick settings, and history.
 
-The default presentation is silent unless information is timely, actionable,
-or safety-critical. Exact values belong in the Ribbon or Panel rather than in
-permanent status labels.
+The Selvage shows workspace position, progress, and warnings. Exact values
+appear in the Ribbon or Panel rather than in permanent status labels.
 
 See [the interface model](docs/interface-model.md) for behavior, state encoding,
 and initial feature priorities.
@@ -57,14 +55,14 @@ actions. See [the architecture overview](docs/architecture.md) and the
 
 ## Development status
 
-The first executable milestone will prove:
+Phase 0 requires:
 
 1. one non-exclusive top-edge surface per output;
 2. a 2-3 pixel pointer-active Selvage with click-through transparent space;
-3. smooth Ribbon reveal without resizing the layer surface;
-4. reliable pointer, focus, Escape, and outside-click behavior;
+3. animated Ribbon reveal without resizing the layer surface;
+4. tested pointer, focus, Escape, and outside-click behavior;
 5. active workspace/window state with a clock fallback; and
-6. clean startup, shutdown, and adapter degradation.
+6. startup and shutdown without orphaned adapter tasks.
 
 Claims in project documentation describe implemented behavior only when they
 are accompanied by verification. Planned behavior is labeled as planned.

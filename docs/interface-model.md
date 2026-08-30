@@ -1,15 +1,15 @@
 # Interface Model
 
-Weftwise treats the top edge as an ambient surface whose information density
-changes with intent and urgency.
+Weftwise uses three UI states at the top edge. Pointer input and current system
+state determine which one is visible.
 
 ## Presentation levels
 
 ### Selvage
 
 The resting surface is a 2-3 pixel line anchored to the top edge with no
-exclusive zone. It is always easy to acquire with a pointer but does not reserve
-application space.
+exclusive zone. It accepts pointer input at the screen boundary and does not
+reserve application space.
 
 Its three stable regions are:
 
@@ -21,20 +21,19 @@ Its three stable regions are:
   microphone or camera use, disconnection, mute, critical temperature, or a
   blocked operation.
 
-The Selvage is a cue, not a dense encoding system. It communicates presence,
-location, progress, and urgency. Exact names and values appear after reveal.
+The Selvage does not display text or exact values. It uses mark position,
+length, color, and pattern. Labels and numbers appear after reveal.
 
 ### Ribbon
 
-Touching the top edge gives immediate visual confirmation. Remaining at the
-edge for a short dwell reveals a 26-30 pixel Ribbon. Moving into the Ribbon
-keeps it open; leaving dismisses it after a brief grace period.
+The line brightens when the pointer reaches the top edge. Holding there for the
+configured dwell time reveals a 26-30 pixel Ribbon. Moving into the Ribbon keeps
+it open; leaving starts the dismissal timer.
 
-The Ribbon presents the selected context with a label and direct actions. A
-volume change can temporarily select audio, media playback can show title and
-transport controls, and an urgent privacy event can preempt ordinary content.
-When nothing contextual is active, it shows time, date, current workspace, and
-the active application.
+The Ribbon labels the selected context and exposes its actions. A volume change
+selects audio temporarily. Media playback can show title and transport controls.
+A privacy event can replace ordinary content. The fallback is time, date,
+current workspace, and active application.
 
 Right-click-only and hover-tooltip-only essential actions are avoided. Scroll
 actions become active only after reveal so accidental top-edge scrolling cannot
@@ -43,8 +42,8 @@ change system state.
 ### Panel
 
 Clicking the Ribbon or invoking a Hyprland binding opens the Panel on the
-focused output. It provides keyboard navigation, search, richer controls, and
-history. Escape and outside click dismiss it reliably and restore prior focus.
+focused output. It provides keyboard navigation, search, controls, and history.
+Escape and outside click dismiss it and restore prior focus.
 
 Initial Panel destinations are workspace/window navigation, media, calendar,
 audio routing, notifications, clipboard history, system health, and power.
@@ -61,7 +60,7 @@ with enough metadata for deterministic selection:
 - expiration or persistent lifetime;
 - minimum display duration;
 - interruptibility and preemption class;
-- progress when meaningful;
+- an optional progress value;
 - available typed actions; and
 - output affinity when the context belongs to one monitor.
 
@@ -71,11 +70,10 @@ ordinary media or clock content.
 
 ## Multi-output behavior
 
-Each output owns a Selvage so workspace location remains visible where it
-matters. Pointer reveal occurs on the output being touched. Keyboard invocation
-opens the Panel on the focused output. Global activity can appear on every
-Selvage as a quiet cue, but descriptive content appears on only the active
-output unless configuration requests otherwise.
+Each output owns a Selvage and displays its local workspace marks. Pointer reveal
+occurs on the output being touched. Keyboard invocation opens the Panel on the
+focused output. Global activity can place a status mark on every Selvage, but
+labels appear only on the active output unless configured otherwise.
 
 Output surfaces are created and removed through a surface manager. Initial work
 establishes this ownership model; later work hardens hotplug, output renaming,

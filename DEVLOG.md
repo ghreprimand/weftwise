@@ -6,13 +6,28 @@ or unmeasured. Planned work is never presented as implemented behavior.
 
 ---
 
-## 2026-08-29 - Establish the product and public repository foundation
+## 2026-08-30 - Replace vague product language
 
-The initial product direction defines Weftwise as an ambient desktop control
-surface rather than a restyled collection of status modules. Its interface has
-three levels: a 2-3 pixel Selvage for quiet state, a compact Ribbon revealed by
-pointer intent, and an interactive Panel opened explicitly. The collapsed
-surface reserves no compositor work area.
+The README and interface documents now describe dimensions, states, triggers,
+and controls directly. The project summary identifies Weftwise as a minimal
+top-edge interface. Terms that described tone instead of behavior were removed.
+
+No product behavior changed. The repository still contains documentation only.
+
+### Verification
+
+- The removed terminology no longer appears in current tracked files.
+- Documentation safety and formatting checks passed before publication.
+- Rust gates remain unavailable because no Rust crate exists yet.
+
+---
+
+## 2026-08-29 - Define the interface and repository rules
+
+Weftwise is defined as a top-edge interface rather than a restyled collection of
+status modules. It has three levels: a 2-3 pixel Selvage for persistent state, a
+compact Ribbon revealed from the top edge, and an interactive Panel opened by a
+click or key binding. The collapsed surface reserves no compositor work area.
 
 The architecture selects Rust, GTK4, Relm4, `gtk4-layer-shell`, Tokio, `zbus`,
 serde, TOML, and structured tracing. Service adapters remain independent from
@@ -20,13 +35,13 @@ GTK components and publish typed events into one authoritative application
 state. Output surfaces are managed per monitor from the first native proof,
 while comprehensive hotplug behavior remains later work.
 
-The repository foundation adds public project, architecture, interface,
-contribution, security, and data-safety documentation. Local development
+The initial repository adds project, architecture, interface, contribution,
+security, and data-safety documentation. Local development
 instructions remain ignored, while public policy is tracked. A staged-content
 safety check rejects likely secrets, private home-directory paths, dangerous
 filenames, and non-GitHub commit email identities before a local landing.
 
-The reviewed foundation was published as the root commit of the public
+The reviewed files were published as the root commit of the public
 `ghreprimand/weftwise` repository. GitHub secret scanning and push protection
 are enabled. Private vulnerability reporting, vulnerability alerts, and
 automated dependency security fixes are enabled, and the unused wiki is

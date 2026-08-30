@@ -2,7 +2,7 @@
 
 ## Status
 
-This document records the product and implementation foundation used to scaffold
+This document records the product and implementation decisions used to scaffold
 the public repository. Implemented behavior, once present, takes precedence over
 planned behavior and must remain synchronized with this document.
 
@@ -21,37 +21,37 @@ The exact crates.io, npm, PyPI, Arch/AUR, and `ghreprimand/weftwise` namespaces 
 
 ## Product concept
 
-Weftwise is a native, personal desktop surface for OdysseyOS on Hyprland. It
-begins as a nearly invisible contextual top edge that coexists with Waybar, but
-its architecture should allow it to grow into a complete Waybar replacement
-and, potentially, a cohesive desktop shell.
+Weftwise is a native desktop interface for OdysseyOS on Hyprland. Its collapsed
+state is a 2-3 pixel top-edge line that runs alongside Waybar. Later phases can
+replace Waybar modules and add desktop-shell functions.
 
 The goal is not to reproduce Waybar with different styling. Waybar already handles independent status labels well. Weftwise should provide capabilities that are awkward in Waybar's module-and-stdout model:
 
 - Shared, typed state across widgets.
 - Context-sensitive content instead of a permanently crowded status strip.
-- Rich panels, popovers, lists, search, and keyboard interaction.
-- Fluid expansion from quiet indicators into useful controls.
+- Panels, popovers, lists, search, and keyboard interaction.
+- Transitions from status marks to labeled controls.
 - Event-driven integrations rather than many polling scripts and subprocesses.
 - Precise control over layer surfaces, input regions, monitor behavior, and animations.
 - A unified design language for the bar, OSDs, notifications, quick settings, and related shell components.
 
-The guiding idea is an **ambient control plane**. It should remain quiet when nothing needs attention, show the single most relevant piece of state when something does, and expand into real tools on demand.
+The bar uses a central priority policy. Warnings and active work replace the
+fallback display when necessary, and the bar expands to show controls when the
+user opens it.
 
 ## Initial user experience
 
-The first useful version should be a nearly invisible top-edge surface running
-alongside the existing Waybar configuration. Its interaction model has three
-levels:
+The first version uses a minimal top-edge surface alongside the existing Waybar
+configuration. Its interaction model has three levels:
 
-- **Selvage:** a persistent 2-3 pixel ambient line with no exclusive zone.
-- **Ribbon:** a compact labeled surface revealed by deliberate pointer intent at
+- **Selvage:** a persistent 2-3 pixel status line with no exclusive zone.
+- **Ribbon:** a compact labeled surface revealed by holding the pointer against
   the top edge.
 - **Panel:** an interactive surface opened by click or a Hyprland binding.
 
 One surface should be owned per output from the initial native proof. The
 focused or pointer-active output receives detailed contextual presentation.
-Waybar should continue providing its mature modules during early development.
+Waybar should continue providing its existing modules during early development.
 Weftwise should show contextual information rather than a permanent row of
 generic hardware statistics.
 
@@ -62,7 +62,7 @@ Potential contextual content, in rough priority order:
 3. Active media: title, artist, progress, and compact playback controls.
 4. Active workspace/window context: application, title, project, Git branch, and dirty state where available.
 5. Temporary feedback: volume, brightness, screenshot, clipboard, or command results.
-6. Quiet fallback: time and date.
+6. Fallback: time and date.
 
 The display policy should be explicit and centralized. Widgets should publish
 candidate content into a priority/arbitration system rather than fighting over
@@ -73,7 +73,7 @@ expiration, and explicit preemption prevent flicker and stale content.
 
 ## Platform and technology choices
 
-The agreed foundation is:
+The selected stack is:
 
 - **Language:** Rust
 - **UI:** GTK4 via `gtk4-rs`
@@ -262,7 +262,7 @@ components do not replace the domain, adapter, or surface ownership layers.
 - Add click-to-open Panel behavior and a Hyprland keybinding entry point.
 - Handle Hyprland and media-player restarts without restarting Weftwise.
 
-### Phase 2 — Ambient system feedback
+### Phase 2 — System feedback
 
 - Volume and microphone state through PipeWire/WirePlumber.
 - Temporary volume and brightness OSDs.
@@ -270,7 +270,7 @@ components do not replace the domain, adapter, or surface ownership layers.
 - Timers and supervised process/build progress.
 - Notification summaries where useful.
 
-### Phase 3 — Mature daily-use surface
+### Phase 3 — Daily-use hardening
 
 - Multi-monitor hotplug, scale-change, renaming, and lifecycle hardening.
 - Configuration loading and live theme reload where safe.
@@ -318,8 +318,8 @@ The first milestone is complete when:
 1. `weftwise` launches native GTK4 layer-shell surfaces on Hyprland.
 2. A 2-3 pixel Selvage appears on each output while Waybar remains active and
    reserves no work area.
-3. Deliberate top-edge intent reveals a Ribbon without intercepting pointer
-   input in transparent collapsed space.
+3. Holding the pointer at the top edge reveals a Ribbon without intercepting
+   pointer input in transparent collapsed space.
 4. It shows the active window/workspace and falls back to the clock.
 5. Playing media causes MPRIS information to take priority according to a documented policy.
 6. Clicking the Ribbon opens a small interactive Panel that dismisses reliably

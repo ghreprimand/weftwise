@@ -1,7 +1,7 @@
 # Contributing to Weftwise
 
 Weftwise is an early, maintainer-led project. Changes should remain small,
-reviewable, evidence-backed, and aligned with the ambient interface model.
+reviewable, evidence-backed, and consistent with the interface model.
 
 ## Before changing code
 
@@ -74,7 +74,7 @@ assignments.
 
 A change should include:
 
-- a focused explanation of behavior and motivation;
+- a concise explanation of behavior and motivation;
 - tests appropriate to the changed boundary;
 - exact verification results with limitations;
 - documentation updates for user-visible behavior; and
