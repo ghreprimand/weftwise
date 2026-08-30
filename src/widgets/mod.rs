@@ -9,7 +9,10 @@ use relm4::gtk::glib;
 use relm4::gtk::prelude::*;
 
 use crate::action::AppAction;
-use crate::state::{OutputId, OutputView, PresentationLevel};
+use crate::context::arbitration::Severity;
+use crate::state::{
+    MarkPattern, MarkShape, OutputId, OutputView, PresentationLevel, StatusMark, WorkspaceMark,
+};
 
 pub mod active_context;
 pub mod clock;
@@ -43,7 +46,9 @@ pub(crate) struct TopEdgeWidgets {
     pub root: gtk::Overlay,
     revealer: gtk::Revealer,
     ribbon_label: gtk::Label,
-    selvage_marks: gtk::Box,
+    navigation_marks: gtk::Box,
+    activity_marks: gtk::Box,
+    attention_marks: gtk::Box,
     popover: gtk::Popover,
     first_panel_action: gtk::Button,
 }
@@ -89,18 +94,39 @@ impl TopEdgeWidgets {
 
         let selvage = gtk::Box::builder()
             .height_request(SELVAGE_HEIGHT)
+            .homogeneous(true)
             .hexpand(true)
             .halign(gtk::Align::Fill)
             .valign(gtk::Align::Start)
             .build();
         selvage.add_css_class("weftwise-selvage");
-        let selvage_marks = gtk::Box::builder()
+        let navigation_marks = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
             .spacing(2)
             .hexpand(true)
             .halign(gtk::Align::Start)
+            .accessible_role(gtk::AccessibleRole::List)
             .build();
-        selvage.append(&selvage_marks);
+        navigation_marks.add_css_class("weftwise-navigation-region");
+        let activity_marks = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(2)
+            .hexpand(true)
+            .halign(gtk::Align::Center)
+            .accessible_role(gtk::AccessibleRole::Group)
+            .build();
+        activity_marks.add_css_class("weftwise-activity-region");
+        let attention_marks = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(2)
+            .hexpand(true)
+            .halign(gtk::Align::End)
+            .accessible_role(gtk::AccessibleRole::Group)
+            .build();
+        attention_marks.add_css_class("weftwise-attention-region");
+        selvage.append(&navigation_marks);
+        selvage.append(&activity_marks);
+        selvage.append(&attention_marks);
         root.add_overlay(&selvage);
 
         let panel_content = gtk::Box::builder()
@@ -129,6 +155,7 @@ impl TopEdgeWidgets {
             .autohide(true)
             .has_arrow(false)
             .position(gtk::PositionType::Bottom)
+            .accessible_role(gtk::AccessibleRole::Dialog)
             .child(&panel_content)
             .build();
         popover.add_css_class("weftwise-panel");
@@ -182,7 +209,9 @@ impl TopEdgeWidgets {
             root,
             revealer,
             ribbon_label,
-            selvage_marks,
+            navigation_marks,
+            activity_marks,
+            attention_marks,
             popover,
             first_panel_action,
         }
@@ -200,31 +229,34 @@ impl TopEdgeWidgets {
         self.revealer
             .set_reveal_child(level != PresentationLevel::Selvage);
         self.ribbon_label.set_label(&view.ribbon_label);
-        self.ribbon_label.set_tooltip_text(Some(&view.ribbon_label));
-        while let Some(child) = self.selvage_marks.first_child() {
-            self.selvage_marks.remove(&child);
+        self.ribbon_label
+            .set_tooltip_text(Some(&view.ribbon_accessible_label));
+        while let Some(child) = self.navigation_marks.first_child() {
+            self.navigation_marks.remove(&child);
         }
         for workspace in &view.workspaces {
-            let mark = gtk::Box::builder()
-                .width_request(if workspace.active { 22 } else { 14 })
-                .height_request(SELVAGE_HEIGHT)
-                .build();
-            mark.add_css_class("weftwise-workspace-mark");
-            if workspace.active {
-                mark.add_css_class("active");
-            } else if workspace.occupied {
-                mark.add_css_class("occupied");
-            }
-            mark.set_tooltip_text(Some(&workspace.label));
-            self.selvage_marks.append(&mark);
+            self.navigation_marks.append(&workspace_mark(workspace));
+        }
+        while let Some(child) = self.activity_marks.first_child() {
+            self.activity_marks.remove(&child);
+        }
+        for status in &view.activity {
+            self.activity_marks.append(&status_mark(status));
+        }
+        while let Some(child) = self.attention_marks.first_child() {
+            self.attention_marks.remove(&child);
+        }
+        for status in &view.attention {
+            self.attention_marks.append(&status_mark(status));
         }
 
         if level == PresentationLevel::Panel {
             window.set_keyboard_mode(KeyboardMode::OnDemand);
-            if !self.popover.is_visible() {
+            let opening = !self.popover.is_visible();
+            if opening {
                 self.popover.popup();
+                self.first_panel_action.grab_focus();
             }
-            self.first_panel_action.grab_focus();
         } else {
             window.set_keyboard_mode(KeyboardMode::None);
             if self.popover.is_visible() {
@@ -238,5 +270,68 @@ impl TopEdgeWidgets {
         if self.popover.parent().is_some() {
             self.popover.unparent();
         }
+    }
+}
+
+fn workspace_mark(workspace: &WorkspaceMark) -> gtk::Label {
+    let mark = gtk::Label::builder()
+        .label(&workspace.accessible_label)
+        .accessible_role(gtk::AccessibleRole::ListItem)
+        .width_request(if workspace.active { 22 } else { 14 })
+        .height_request(SELVAGE_HEIGHT)
+        .build();
+    mark.add_css_class("weftwise-workspace-mark");
+    add_mark_semantics(&mark, workspace.shape, workspace.pattern);
+    if workspace.active {
+        mark.add_css_class("active");
+    } else if workspace.occupied {
+        mark.add_css_class("occupied");
+    }
+    mark.set_tooltip_text(Some(&workspace.accessible_label));
+    mark
+}
+
+fn status_mark(status: &StatusMark) -> gtk::Label {
+    let width = status
+        .progress_basis_points
+        .map_or(14, |progress| 8 + i32::from(progress) * 22 / 10_000);
+    let mark = gtk::Label::builder()
+        .label(&status.accessible_label)
+        .accessible_role(if status.progress_basis_points.is_some() {
+            gtk::AccessibleRole::ProgressBar
+        } else if status.severity >= Severity::Warning {
+            gtk::AccessibleRole::Alert
+        } else {
+            gtk::AccessibleRole::Status
+        })
+        .width_request(width)
+        .height_request(SELVAGE_HEIGHT)
+        .build();
+    mark.add_css_class("weftwise-status-mark");
+    add_mark_semantics(&mark, status.shape, status.pattern);
+    match status.severity {
+        Severity::Normal => mark.add_css_class("normal"),
+        Severity::Notice => mark.add_css_class("notice"),
+        Severity::Warning => mark.add_css_class("warning"),
+        Severity::Critical => mark.add_css_class("critical"),
+    }
+    if status.selected {
+        mark.add_css_class("selected");
+    }
+    mark.set_tooltip_text(Some(&status.accessible_label));
+    mark
+}
+
+fn add_mark_semantics(mark: &impl IsA<gtk::Widget>, shape: MarkShape, pattern: MarkPattern) {
+    match shape {
+        MarkShape::Dot => mark.add_css_class("shape-dot"),
+        MarkShape::Bar => mark.add_css_class("shape-bar"),
+        MarkShape::Diamond => mark.add_css_class("shape-diamond"),
+        MarkShape::Triangle => mark.add_css_class("shape-triangle"),
+    }
+    match pattern {
+        MarkPattern::Outline => mark.add_css_class("pattern-outline"),
+        MarkPattern::Solid => mark.add_css_class("pattern-solid"),
+        MarkPattern::Striped => mark.add_css_class("pattern-striped"),
     }
 }

@@ -6,6 +6,63 @@ or unmeasured. Planned work is never presented as implemented behavior.
 
 ---
 
+## 2026-08-30 - Add deterministic context arbitration and accessible projections
+
+The root state now owns a pure presentation candidate arbiter. Candidates carry
+a protocol-safe source-scoped stable identity, typed source and semantic kind, severity,
+normalized creation/update/expiration time, bounded minimum display duration,
+explicit preemption class, optional basis-point progress, bounded typed actions,
+and optional output affinity. Visible and accessible labels pass through the
+existing bounded display-text type.
+
+Source-scoped identity deduplicates rapid producer updates in place without
+allowing unrelated adapters to collide. Selection uses a
+total deterministic order, per-output affinity, expiration, stale-source
+removal, and minimum-duration stickiness. A higher preemption class interrupts
+sticky content, with privacy-critical state above every ordinary class.
+Normalized late arrivals are re-ranked without making equivalent candidate sets
+depend on insertion order, while a genuinely newer passive candidate waits for
+the active minimum interval. Expiration always releases a selection to the next
+candidate, including a fallback. Candidate storage, producer text, progress,
+actions, and media seek payloads are bounded before entering authoritative
+state. Older or conflicting equal-time producer revisions cannot replace the
+accepted value.
+
+Immutable output projections now divide the Selvage into homogeneous navigation,
+activity, and attention regions. Local workspace selection uses point/bar shape,
+width, and outline/solid fill. Warning and privacy content uses distinct
+diamond/triangle geometry and striped fill in addition to semantic colors.
+Every compact mark is a GTK label carrying the complete accessible state text;
+the Ribbon receives the selected label and bounded typed actions without storing
+domain or arbitration state inside widgets. Global detail appears on the
+focused output, or on the lowest stable output when no output is focused, while
+compact global state remains visible everywhere. Opening the Panel takes focus
+once per transition rather than resetting keyboard focus during later renders.
+Existing reduced-motion and keyboard interaction semantics are unchanged.
+
+### Verification
+
+- Ten focused arbitration unit tests cover insertion-order independence,
+  minimum-duration stickiness, privacy-critical preemption, expiration fallback,
+  update-in-place bounds, candidate-set limits, output affinity, stale-source
+  removal, cross-source identity isolation, conflicting revisions, and backward
+  clock input.
+- Eight independent Phase 3 contract tests cover priority inversions, equal
+  ties, rapid and stale updates, clock and output changes, privacy preemption,
+  non-color attention semantics, bounded typed actions, keyboard Panel inputs,
+  and reduced motion.
+- The complete worktree gate passes with exact Rust 1.96.0 in the digest-pinned
+  Arch environment: formatting, deny-warning Clippy, 69 tests, documentation,
+  file-size and dependency-topology checks, public-safety automation, and
+  RustSec over 148 dependencies and 1,226 advisories.
+
+### Next
+
+- Perform native accessibility inspection; automated projection, keyboard, and
+  reduced-motion contracts do not constitute assistive-technology evidence.
+- Begin MPRIS discovery and sanitization without changing the established
+  arbitration ownership boundary.
+
 ## 2026-08-30 - Restore repository-backed CI checkout
 
 The Arch CI job now installs Git before `actions/checkout` and explicitly marks

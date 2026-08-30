@@ -2,6 +2,8 @@
 @define-color weftwise_surface rgba(34, 29, 22, 0.98);
 @define-color weftwise_text #f4ead7;
 @define-color weftwise_accent #d5a84b;
+@define-color weftwise_warning #e6a34a;
+@define-color weftwise_critical #ef6a62;
 
 window.weftwise-surface,
 .weftwise-root {
@@ -13,9 +15,16 @@ window.weftwise-surface,
   background: @weftwise_accent;
 }
 
+.weftwise-navigation-region,
+.weftwise-activity-region,
+.weftwise-attention-region {
+  min-width: 1px;
+}
+
 .weftwise-workspace-mark {
   min-width: 14px;
   min-height: 3px;
+  font-size: 0.1px;
   background: alpha(@weftwise_text, 0.42);
 }
 
@@ -26,6 +35,64 @@ window.weftwise-surface,
 .weftwise-workspace-mark.active {
   min-width: 22px;
   background: @weftwise_accent;
+}
+
+.weftwise-status-mark {
+  min-width: 8px;
+  min-height: 3px;
+  font-size: 0.1px;
+  background: alpha(@weftwise_text, 0.72);
+}
+
+.weftwise-status-mark.warning {
+  background-color: @weftwise_warning;
+}
+
+.weftwise-status-mark.critical {
+  background-color: @weftwise_critical;
+}
+
+.shape-dot {
+  min-width: 4px;
+  border-radius: 3px;
+}
+
+.shape-bar {
+  border-radius: 0;
+}
+
+.shape-diamond {
+  min-width: 10px;
+  border-left: 3px solid transparent;
+  border-right: 3px solid transparent;
+}
+
+.shape-triangle {
+  min-width: 12px;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-bottom: 3px solid @weftwise_critical;
+  background: transparent;
+}
+
+.pattern-outline {
+  background: transparent;
+  border-top: 1px solid currentColor;
+  border-bottom: 1px solid currentColor;
+}
+
+.pattern-solid {
+  background-image: none;
+}
+
+.pattern-striped:not(.shape-triangle) {
+  background-image: repeating-linear-gradient(
+    90deg,
+    currentColor 0,
+    currentColor 2px,
+    transparent 2px,
+    transparent 4px
+  );
 }
 
 button.weftwise-ribbon {

@@ -14,7 +14,10 @@ physical-edge placement without a new reserved area. Pointer, stacking, and
 focus behavior remain unmeasured. Phase 2 now provides root-owned typed
 compositor state, event-first direct Hyprland socket reconciliation, local
 workspace and active-context rendering, and a boundary-aligned in-process clock.
-Compositor restart behavior remains a native-session check.
+Phase 3 adds the root-owned deterministic presentation candidate reducer plus
+stable navigation/activity/attention projections whose shape, fill pattern,
+text, and accessible labels do not rely on color alone. Compositor restart and
+native accessibility behavior remain session checks.
 
 ## Name
 
@@ -74,12 +77,14 @@ Potential contextual content, in rough priority order:
 5. Temporary feedback: volume, brightness, screenshot, clipboard, or command results.
 6. Fallback: time and date.
 
-The display policy should be explicit and centralized. Widgets should publish
-candidate content into a priority/arbitration system rather than fighting over
-layout directly. Candidates include stable identity, severity, creation and
-expiration time, minimum display duration, interruptibility, progress, typed
-actions, and output affinity. Priority alone is insufficient: stickiness,
-expiration, and explicit preemption prevent flicker and stale content.
+The implemented display policy is explicit and centralized. Producers publish
+candidate content into a root-owned arbitration system rather than fighting over
+layout directly. Candidates include source-scoped stable identity, semantic kind,
+severity, normalized creation/update/expiration time, bounded minimum display
+duration, preemption class, optional progress, bounded typed actions, and output
+affinity. Priority alone is insufficient: deterministic ties, update-in-place,
+stickiness, expiration, stale-source removal, and explicit preemption prevent
+flicker and stale content.
 
 ## Platform and technology choices
 

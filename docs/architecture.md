@@ -41,6 +41,24 @@ travels in the opposite direction as typed actions handled by the dispatcher.
 No background task mutates a GTK object. GTK and Relm4 components remain on the
 main thread.
 
+## Context arbitration
+
+Presentation producers publish bounded candidates rather than selecting GTK
+widgets. A candidate has a protocol-safe source-scoped stable identity, typed source and kind,
+semantic severity, normalized creation/update/expiration timestamps, a bounded
+minimum-display interval, preemption class, optional basis-point progress,
+bounded typed actions, and optional output affinity. Visible and accessible
+labels use the existing sanitized display-text boundary.
+
+The root-owned pure reducer deduplicates by source and identity, updates candidates in
+place, expires old content, removes stale producers, and retains per-output
+selection memory. Ranking is total and deterministic. An active candidate stays
+selected through its minimum interval unless a higher preemption class arrives;
+privacy-critical content is the highest class. Logically late delivery is
+reconciled through normalized timestamps so equal candidate sets do not depend
+on insertion order. Expiration always releases stickiness and reveals the next
+ranked candidate, including the clock fallback.
+
 ## Async supervision
 
 One application supervisor owns long-lived adapter tasks and their cancellation
@@ -118,7 +136,11 @@ GDK connector names bind process-local surfaces to Hyprland outputs without
 entering diagnostics. The root reducer owns compositor outputs, workspaces,
 address-bearing clients, active context, and explicit starting, ready, stale,
 or unavailable adapter state. GTK surfaces receive immutable local projections:
-bounded workspace marks plus an active workspace/window label or clock fallback.
+bounded workspace marks, bounded activity and attention marks, selected typed
+actions, and an active candidate label or compositor/clock fallback. The
+Selvage uses stable navigation/activity/attention thirds. Shape, width, fill
+pattern, visible text after reveal, and accessible labels encode state in
+addition to color; GTK widgets do not retain arbitration state.
 
 ## Configuration
 

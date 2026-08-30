@@ -5,12 +5,22 @@ use std::fmt;
 use std::time::Duration;
 
 use crate::config::Config;
+use crate::context::arbitration::{
+    ArbitrationInput, Arbitrator, CandidateAction, CandidateRegion, PresentationKind,
+    PresentationProjection, Severity, Timestamp,
+};
 
 /// Delay before a pointer at the top edge reveals the Ribbon.
 pub const DWELL_DELAY: Duration = Duration::from_millis(240);
 
 /// Delay before a pointer departure collapses the Ribbon.
 pub const DISMISS_DELAY: Duration = Duration::from_millis(360);
+/// Maximum local workspace marks rendered in the navigation region.
+pub const MAX_NAVIGATION_MARKS: usize = 16;
+/// Maximum selected activity marks rendered in the center region.
+pub const MAX_ACTIVITY_MARKS: usize = 4;
+/// Maximum warning/privacy marks rendered in the attention region.
+pub const MAX_ATTENTION_MARKS: usize = 4;
 
 /// Process-local identity assigned to a GDK output surface.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -367,6 +377,53 @@ pub struct WorkspaceMark {
     pub active: bool,
     /// Whether it contains any clients.
     pub occupied: bool,
+    /// Color-independent geometric state.
+    pub shape: MarkShape,
+    /// Color-independent fill pattern.
+    pub pattern: MarkPattern,
+    /// Complete accessible state label.
+    pub accessible_label: String,
+}
+
+/// Geometric signal used when color is unavailable.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MarkShape {
+    /// Small point for an empty inactive workspace.
+    Dot,
+    /// Horizontal bar for ordinary occupied or activity state.
+    Bar,
+    /// Diamond for warning state.
+    Diamond,
+    /// Triangle for critical or privacy state.
+    Triangle,
+}
+
+/// Fill pattern used in addition to shape and color.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MarkPattern {
+    /// Hollow or outlined state.
+    Outline,
+    /// Solid selected or ordinary active state.
+    Solid,
+    /// Striped exceptional state.
+    Striped,
+}
+
+/// One bounded activity or attention signal in a stable Selvage region.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StatusMark {
+    /// Geometric semantic signal.
+    pub shape: MarkShape,
+    /// Fill pattern independent of color.
+    pub pattern: MarkPattern,
+    /// Semantic severity.
+    pub severity: Severity,
+    /// Whether this mark represents the selected Ribbon candidate.
+    pub selected: bool,
+    /// Optional progress in basis points.
+    pub progress_basis_points: Option<u16>,
+    /// Complete accessible state label.
+    pub accessible_label: String,
 }
 
 /// Immutable projection consumed by one output surface.
@@ -376,8 +433,16 @@ pub struct OutputView {
     pub presentation: OutputPresentation,
     /// Local ordered workspaces.
     pub workspaces: Vec<WorkspaceMark>,
+    /// Stable center-region activity marks.
+    pub activity: Vec<StatusMark>,
+    /// Stable end-region attention marks.
+    pub attention: Vec<StatusMark>,
     /// Active context text, or the clock fallback.
     pub ribbon_label: String,
+    /// Complete accessible label for the Ribbon button.
+    pub ribbon_accessible_label: String,
+    /// Typed actions advertised by the selected candidate.
+    pub candidate_actions: Vec<CandidateAction>,
     /// Whether the matched compositor output is focused.
     pub focused: bool,
 }
@@ -573,6 +638,9 @@ pub struct AppState {
     /// Root-owned compositor domain state.
     pub desktop: DesktopState,
     clock_label: String,
+    arbitration: Arbitrator,
+    arbitration_now: Timestamp,
+    selected_candidates: BTreeMap<OutputId, PresentationProjection>,
 }
 
 impl AppState {
@@ -584,8 +652,20 @@ impl AppState {
         reduced_motion: bool,
     ) {
         for id in removed {
+            if let Some(output) = self
+                .output_connectors
+                .get(&id)
+                .and_then(Option::as_ref)
+                .cloned()
+            {
+                self.arbitration.apply(
+                    ArbitrationInput::OutputRemoved(output),
+                    self.arbitration_now,
+                );
+            }
             self.outputs.remove(&id);
             self.output_connectors.remove(&id);
+            self.selected_candidates.remove(&id);
         }
         for id in added {
             self.outputs
@@ -593,6 +673,7 @@ impl AppState {
                 .or_insert_with(|| OutputPresentation::new(reduced_motion));
             self.output_connectors.entry(id).or_default();
         }
+        self.refresh_arbitration_selections();
     }
 
     /// Replace GDK-to-compositor connector bindings after output reconciliation.
@@ -602,6 +683,20 @@ impl AppState {
                 self.output_connectors
                     .insert(id, connector.as_deref().and_then(OutputName::new));
             }
+        }
+        self.refresh_arbitration_selections();
+    }
+
+    /// Apply one deterministic candidate reducer input and refresh projections.
+    pub fn apply_arbitration(&mut self, input: ArbitrationInput, now: Timestamp) -> Vec<OutputId> {
+        self.arbitration_now = now;
+        let before = self.selected_candidates.clone();
+        let state_changed = self.arbitration.apply(input, now);
+        self.refresh_arbitration_selections();
+        if state_changed || before != self.selected_candidates {
+            self.output_ids().collect()
+        } else {
+            Vec::new()
         }
     }
 
@@ -674,12 +769,29 @@ impl AppState {
                 label: workspace.name.as_str().to_owned(),
                 active: self.desktop.active.workspace == Some(workspace.id),
                 occupied: workspace.clients > 0,
+                shape: if self.desktop.active.workspace == Some(workspace.id)
+                    || workspace.clients > 0
+                {
+                    MarkShape::Bar
+                } else {
+                    MarkShape::Dot
+                },
+                pattern: if self.desktop.active.workspace == Some(workspace.id) {
+                    MarkPattern::Solid
+                } else {
+                    MarkPattern::Outline
+                },
+                accessible_label: workspace_accessible_label(
+                    workspace.name.as_str(),
+                    self.desktop.active.workspace == Some(workspace.id),
+                    workspace.clients > 0,
+                ),
             })
             .collect::<Vec<_>>();
         workspaces.sort_by_key(|workspace| workspace.id);
-        workspaces.truncate(16);
+        workspaces.truncate(MAX_NAVIGATION_MARKS);
 
-        let ribbon_label = if focused {
+        let fallback_label = if focused {
             self.active_context_label()
         } else {
             compositor_output
@@ -689,11 +801,33 @@ impl AppState {
                 .filter(|label| !label.is_empty())
                 .unwrap_or_else(|| self.clock_fallback())
         };
+        let candidate = self.selected_candidates.get(&id);
+        let detail_output = self.global_detail_output();
+        let detailed_candidate = candidate
+            .filter(|projection| projection.output_affinity.is_some() || detail_output == Some(id));
+        let ribbon_label = detailed_candidate
+            .map(|projection| projection.label.clone())
+            .filter(|label| !label.is_empty())
+            .unwrap_or(fallback_label);
+        let ribbon_accessible_label = detailed_candidate
+            .map(|projection| projection.accessible_label.clone())
+            .filter(|label| !label.is_empty())
+            .unwrap_or_else(|| format!("Ribbon: {ribbon_label}"));
+        let (mut activity, mut attention) =
+            candidate.map(candidate_status_marks).unwrap_or_default();
+        activity.truncate(MAX_ACTIVITY_MARKS);
+        attention.truncate(MAX_ATTENTION_MARKS);
 
         Some(OutputView {
             presentation,
             workspaces,
+            activity,
+            attention,
             ribbon_label,
+            ribbon_accessible_label,
+            candidate_actions: detailed_candidate
+                .map(|projection| projection.actions.clone())
+                .unwrap_or_default(),
             focused,
         })
     }
@@ -712,6 +846,45 @@ impl AppState {
     /// Iterate over output identities without exposing shell objects.
     pub fn output_ids(&self) -> impl Iterator<Item = OutputId> + '_ {
         self.outputs.keys().copied()
+    }
+
+    fn refresh_arbitration_selections(&mut self) {
+        let bindings = self
+            .outputs
+            .keys()
+            .map(|id| {
+                (
+                    *id,
+                    self.output_connectors
+                        .get(id)
+                        .and_then(Option::as_ref)
+                        .cloned(),
+                )
+            })
+            .collect::<Vec<_>>();
+        self.selected_candidates.clear();
+        for (id, output) in bindings {
+            if let Some(projection) = self
+                .arbitration
+                .select_for(output.as_ref(), self.arbitration_now)
+            {
+                self.selected_candidates.insert(id, projection);
+            }
+        }
+    }
+
+    fn global_detail_output(&self) -> Option<OutputId> {
+        self.outputs
+            .keys()
+            .copied()
+            .find(|id| {
+                self.output_connectors
+                    .get(id)
+                    .and_then(Option::as_ref)
+                    .and_then(|name| self.desktop.outputs.get(name))
+                    .is_some_and(|output| output.focused)
+            })
+            .or_else(|| self.outputs.keys().next().copied())
     }
 
     fn active_context_label(&self) -> String {
@@ -945,9 +1118,50 @@ impl AppState {
     }
 }
 
+fn workspace_accessible_label(label: &str, active: bool, occupied: bool) -> String {
+    let state = match (active, occupied) {
+        (true, true) => "active, occupied",
+        (true, false) => "active, empty",
+        (false, true) => "inactive, occupied",
+        (false, false) => "inactive, empty",
+    };
+    format!("Workspace {label}: {state}")
+}
+
+fn candidate_status_marks(
+    projection: &PresentationProjection,
+) -> (Vec<StatusMark>, Vec<StatusMark>) {
+    let shape = match (projection.kind, projection.severity) {
+        (PresentationKind::Privacy, _) | (_, Severity::Critical) => MarkShape::Triangle,
+        (PresentationKind::Warning, _) | (_, Severity::Warning) => MarkShape::Diamond,
+        _ => MarkShape::Bar,
+    };
+    let pattern = match projection.kind {
+        PresentationKind::Privacy | PresentationKind::Warning => MarkPattern::Striped,
+        _ if projection.severity >= Severity::Warning => MarkPattern::Striped,
+        _ => MarkPattern::Solid,
+    };
+    let mark = StatusMark {
+        shape,
+        pattern,
+        severity: projection.severity,
+        selected: true,
+        progress_basis_points: projection.progress.map(|progress| progress.basis_points()),
+        accessible_label: projection.accessible_label.clone(),
+    };
+    match projection.kind.region() {
+        CandidateRegion::None => (Vec::new(), Vec::new()),
+        CandidateRegion::Activity => (vec![mark], Vec::new()),
+        CandidateRegion::Attention => (Vec::new(), vec![mark]),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::context::arbitration::{
+        CandidateId, CandidateSource, PreemptionClass, PresentationCandidate,
+    };
 
     fn scheduled_dwell(state: &mut OutputPresentation) -> InteractionToken {
         let effects = state.update(InteractionInput::PointerEntered);
@@ -1022,5 +1236,73 @@ mod tests {
         );
         assert!(state.reduced_motion());
         assert_eq!(state.level(), PresentationLevel::Selvage);
+    }
+
+    #[test]
+    fn global_candidate_detail_appears_only_on_the_focused_output() {
+        let first_id = OutputId::new(1);
+        let second_id = OutputId::new(2);
+        let first_name = OutputName::new("SYNTH-1").expect("output name");
+        let second_name = OutputName::new("SYNTH-2").expect("output name");
+        let mut state = AppState::default();
+        state.reconcile_outputs([first_id, second_id], [], false);
+        state.bind_outputs([
+            (first_id, Some("SYNTH-1".to_owned())),
+            (second_id, Some("SYNTH-2".to_owned())),
+        ]);
+        state.desktop.outputs.insert(
+            first_name.clone(),
+            CompositorOutput {
+                id: 1,
+                name: first_name,
+                focused: false,
+                scale_milli: 1_000,
+                active_workspace: None,
+                fullscreen: false,
+            },
+        );
+        state.desktop.outputs.insert(
+            second_name.clone(),
+            CompositorOutput {
+                id: 2,
+                name: second_name,
+                focused: true,
+                scale_milli: 1_000,
+                active_workspace: None,
+                fullscreen: false,
+            },
+        );
+        state.set_clock_label("12:00".to_owned());
+        state.apply_arbitration(
+            ArbitrationInput::Upsert(PresentationCandidate {
+                id: CandidateId::new("global-build").expect("candidate id"),
+                source: CandidateSource::Activity,
+                kind: PresentationKind::Activity,
+                severity: Severity::Normal,
+                label: DisplayText::new("Build complete", 64),
+                accessible_label: DisplayText::new("Build complete", 128),
+                created_at: Timestamp::from_millis(1),
+                updated_at: Timestamp::from_millis(1),
+                expires_at: None,
+                minimum_display: Duration::ZERO,
+                preemption: PreemptionClass::Passive,
+                progress: None,
+                actions: vec![CandidateAction::RevealDetails],
+                output_affinity: None,
+            }),
+            Timestamp::from_millis(1),
+        );
+
+        let first = state.output_view(first_id).expect("first view");
+        let second = state.output_view(second_id).expect("second view");
+        assert_eq!(first.ribbon_label, "12:00");
+        assert!(first.candidate_actions.is_empty());
+        assert_eq!(first.activity.len(), 1);
+        assert_eq!(second.ribbon_label, "Build complete");
+        assert_eq!(
+            second.candidate_actions,
+            vec![CandidateAction::RevealDetails]
+        );
+        assert_eq!(second.activity.len(), 1);
     }
 }

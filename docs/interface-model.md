@@ -59,10 +59,10 @@ A system tray remains a compatibility feature for a later milestone.
 
 ## Context arbitration
 
-Widgets do not compete for layout. Producers publish presentation candidates
-with enough metadata for deterministic selection:
+Widgets do not compete for layout. The implemented root-owned arbiter accepts
+presentation candidates with:
 
-- stable identity and source;
+- source-scoped stable identity;
 - semantic kind and severity;
 - creation and update time;
 - expiration or persistent lifetime;
@@ -74,7 +74,13 @@ with enough metadata for deterministic selection:
 
 Priority is only one input. Stickiness prevents flicker, expiration removes
 stale events, and explicit preemption allows privacy-critical state to interrupt
-ordinary media or clock content.
+ordinary media or clock content. Source-scoped identity deduplicates rapid updates in
+place without resetting the active minimum-display interval. The reducer uses
+normalized millisecond timestamps and a total tie-break order, so equivalent
+candidate sets select the same result independent of insertion order. Minimum
+display durations are bounded, expired candidates never remain sticky, stale
+producers are removed explicitly, and output-affine candidates are invisible on
+other outputs. When no stronger content is available, a fallback candidate wins.
 
 ## Multi-output behavior
 
@@ -99,7 +105,12 @@ Ribbon.
 Animation respects the desktop animation preference and an explicit
 reduced-motion setting. Reduced motion uses immediate state changes with the
 same focus and dismissal semantics. Color is never the only signal for urgent
-or privacy-critical state, and every Panel action remains keyboard accessible.
+or privacy-critical state. Navigation, activity, and attention occupy stable
+thirds of the Selvage. Empty workspaces use a point/outline signal, occupied and
+selected state use different bar widths and fills, warnings use diamonds plus
+striping, and critical or privacy state uses a triangle plus striping. Each mark
+carries a complete text label in the GTK accessibility tree, selected content
+labels the Ribbon, and every Panel action remains keyboard accessible.
 
 ## Initial feature priority
 

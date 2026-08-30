@@ -17,8 +17,10 @@ proof and the design, architecture, and repository-safety documentation. The
 proof implements per-output layer surfaces and the Selvage, Ribbon, and Panel
 interaction model. It also contains the typed Phase 2 state core, direct
 Hyprland socket adapter, local workspace/context projections, and in-process
-clock fallback. Corrected pointer delivery, stacking, and focus behavior remain
-unmeasured until the Hyprland/Waybar checklist passes.
+clock fallback. The root also owns the Phase 3 deterministic presentation
+candidate arbiter and color-independent accessible Selvage projections.
+Corrected pointer delivery, stacking, and focus behavior remain unmeasured until
+the Hyprland/Waybar checklist passes.
 
 ## Interface model
 
@@ -90,6 +92,14 @@ availability, and GDK connector bindings. Each surface renders only its local
 workspace marks; the focused Ribbon renders active context with a
 boundary-aligned in-process clock fallback. This code has deterministic
 coverage, while a sanitized real-session restart check remains unmeasured.
+
+The Phase 3 context slice deduplicates source-scoped stable candidate identities, applies
+normalized timestamp ordering, expiration, bounded stickiness, explicit
+preemption, stale-producer removal, and output affinity in a pure root-owned
+reducer. Each immutable output projection has stable navigation, activity, and
+attention regions. Shape, width, fill pattern, visible text, and accessible
+labels distinguish selection and warnings without relying on color alone.
+Candidate actions remain typed data rather than command strings.
 
 Claims in project documentation describe implemented behavior only when they
 are accompanied by verification. Planned behavior is labeled as planned.
