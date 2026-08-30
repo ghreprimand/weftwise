@@ -1,0 +1,27 @@
+# Local development metadata and private instructions
+/.archon/
+/AGENTS.md
+/CLAUDE.md
+/GEMINI.md
+
+# Local reviews, reports, and captured evidence
+/audit/
+/reports/
+/AUDIT*.md
+*.log
+
+# Secrets and machine-local configuration
+.env
+.env.*
+!.env.example
+/config.toml
+/local/
+
+# Rust build output
+/target/
+
+# Editor and operating-system state
+.DS_Store
+*.swp
+*.swo
+*~
