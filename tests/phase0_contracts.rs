@@ -139,6 +139,11 @@ fn ci_workflow_keeps_immutable_and_non_persistent_inputs() {
         workflow[bootstrap..checkout].contains(" git "),
         "the pre-checkout bootstrap must install Git"
     );
+    assert!(workflow.contains("git config --global --add safe.directory \"$GITHUB_WORKSPACE\""));
+    assert!(
+        !workflow.contains("safe.directory '*'") && !workflow.contains("safe.directory \"*\""),
+        "CI must trust only its checked-out workspace, not every repository"
+    );
 
     for line in workflow.lines() {
         let trimmed = line.trim_start();

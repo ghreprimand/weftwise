@@ -8,16 +8,20 @@ or unmeasured. Planned work is never presented as implemented behavior.
 
 ## 2026-08-30 - Restore repository-backed CI checkout
 
-The Arch CI job now installs Git before `actions/checkout`. The previous order
-caused checkout to fall back to a source archive, leaving the job without the
-repository metadata required by the tracked-tree safety gate. A contract test
-now preserves the bootstrap-before-checkout ordering and requires Git in that
-bootstrap step.
+The Arch CI job now installs Git before `actions/checkout` and explicitly marks
+only `$GITHUB_WORKSPACE` as a safe Git directory after checkout. The previous
+order caused checkout to fall back to a source archive, leaving the job without
+the repository metadata required by the tracked-tree safety gate. The container
+then rejected the checked-out repository because its mounted ownership differed
+from the container user. A contract test now preserves both requirements and
+rejects a wildcard safe-directory exception.
 
 ### Verification
 
 - GitHub Actions run `33314267426` reproduced the original failure at
   `git rev-parse`: `fatal: not a git repository (or any parent up to mount point /)`.
+- GitHub Actions run `33314837489` confirmed checkout retained repository
+  metadata, then reproduced Git's ownership rejection for the mounted workspace.
 - `bash .github/scripts/check.sh --worktree`: passed locally with 32 tests;
   zero failed, ignored, or measured.
 - The complete worktree gate passed with Rust 1.96.0 in the project's
