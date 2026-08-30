@@ -125,6 +125,21 @@ fn ci_workflow_keeps_immutable_and_non_persistent_inputs() {
     assert!(workflow.contains("image: archlinux:base-devel@sha256:"));
     assert!(workflow.contains("persist-credentials: false"));
 
+    let bootstrap = workflow
+        .find("- name: Install native libraries and audit tooling")
+        .expect("native bootstrap step");
+    let checkout = workflow
+        .find("- name: Check out source")
+        .expect("checkout step");
+    assert!(
+        bootstrap < checkout,
+        "Git must be installed before checkout so checkout retains repository metadata"
+    );
+    assert!(
+        workflow[bootstrap..checkout].contains(" git "),
+        "the pre-checkout bootstrap must install Git"
+    );
+
     for line in workflow.lines() {
         let trimmed = line.trim_start();
         if let Some(action) = trimmed.strip_prefix("uses: ") {

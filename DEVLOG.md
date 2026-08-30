@@ -6,6 +6,31 @@ or unmeasured. Planned work is never presented as implemented behavior.
 
 ---
 
+## 2026-08-30 - Restore repository-backed CI checkout
+
+The Arch CI job now installs Git before `actions/checkout`. The previous order
+caused checkout to fall back to a source archive, leaving the job without the
+repository metadata required by the tracked-tree safety gate. A contract test
+now preserves the bootstrap-before-checkout ordering and requires Git in that
+bootstrap step.
+
+### Verification
+
+- GitHub Actions run `33314267426` reproduced the original failure at
+  `git rev-parse`: `fatal: not a git repository (or any parent up to mount point /)`.
+- `bash .github/scripts/check.sh --worktree`: passed locally with 32 tests;
+  zero failed, ignored, or measured.
+- The complete worktree gate passed with Rust 1.96.0 in the project's
+  digest-pinned Arch `base-devel` environment, including formatting,
+  deny-warning Clippy, tests, documentation, public-safety, and RustSec.
+- A replacement GitHub Actions run remains required before the CI repair is
+  considered verified on the hosted runner.
+
+### Next
+
+- Push the reviewed repair and verify the replacement GitHub Actions run.
+- Continue the Phase 2 state and Hyprland integration landing after CI is green.
+
 ## 2026-08-30 - Implement the Phase 1 native surface proof
 
 The application now owns one top-anchored overlay-layer window per current GDK
