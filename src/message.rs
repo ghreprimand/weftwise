@@ -1,8 +1,9 @@
 //! Typed messages applied by the authoritative root model.
 
 use crate::action::AppAction;
+use crate::services::clock::ClockTick;
 use crate::shell::outputs::ShellEvent;
-use crate::state::{InteractionToken, OutputId};
+use crate::state::{HyprlandUpdate, InteractionToken, OutputId};
 
 /// Interaction timer category.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -20,6 +21,10 @@ pub enum AppMessage {
     Action(AppAction),
     /// Shell output or geometry lifecycle event.
     Shell(ShellEvent),
+    /// Ordered state from the direct Hyprland adapter.
+    Hyprland(HyprlandUpdate),
+    /// Boundary-aligned in-process clock update.
+    Clock(ClockTick),
     /// A generation-checked interaction timer fired.
     TimerElapsed {
         /// Output that owns the timer.

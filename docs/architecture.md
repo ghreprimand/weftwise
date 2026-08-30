@@ -59,6 +59,30 @@ They use in-process system interfaces where practical rather than spawning a
 command for each refresh. Sampling frequency follows presentation need and does
 not turn hidden exact values into continuous UI work.
 
+### Hyprland ordering
+
+The Hyprland adapter resolves the active instance below `XDG_RUNTIME_DIR` on
+every connection attempt and never logs the instance identifier or socket
+paths. It connects the newline-delimited event socket first. While five JSON
+snapshots are requested through fresh, strictly timed, size-bounded request
+connections, parsed events enter a count- and byte-bounded buffer. The root
+receives one atomic snapshot before those events replay in wire order.
+
+Event records split only at the first `>>`. Address-bearing v2 forms are used
+where Hyprland provides them. Unknown events are ignored; malformed recognized
+events, overlong or truncated reads, monitor lifecycle, legacy events without
+stable identity that cannot be paired safely, unresolved workspace identity,
+and buffer overflow mark retained state stale and force fresh discovery plus a
+new snapshot. Paired legacy workspace, focused-output, move, and title events
+are ignored in favor of their stable-identity counterparts. Bounded exponential
+backoff includes jitter.
+The clock is a separate supervised in-process adapter and aligns each update to
+the next wall-clock minute rather than spawning or periodically drifting.
+Synchronous application shutdown first broadcasts cooperative cancellation,
+allows a bounded 100-millisecond grace for adapters to finish, and aborts only
+stragglers. This preserves prompt GTK shutdown without racing every cancellation
+receiver.
+
 ## Surface model
 
 A surface manager owns one top-anchored overlay-layer surface per GDK output.
@@ -66,7 +90,11 @@ Monitor, layer, anchors, namespace, keyboard mode, and the candidate exclusive
 zone are set before presentation. The fixed 30-pixel visual allocation is tall
 enough for the Ribbon, but its collapsed GDK input region covers only the
 3-pixel Selvage. The region is first applied after realization and recomputed
-after allocation or scale notifications.
+directly from the GDK surface layout callback's logical width and after scale
+notifications. The pre-layout region is deliberately empty; the first positive
+layout replaces it synchronously so root-message latency cannot leave a stale
+empty region. Pointer entry and exit are observed in capture phase on the
+fixed-height root widget.
 
 The native proof defaults to `exclusive_zone = -1` and retains `0` as a manual
 comparison value. A native four-output Hyprland session with Waybar showed that
@@ -85,6 +113,12 @@ Root state owns each output's presentation level, pointer state, reduced-motion
 projection, and timer generation. GTK callbacks emit typed actions. Stale dwell
 and dismissal timers cannot change state, and all GLib sources, output signals,
 surfaces, and supervised tasks have explicit shutdown owners.
+
+GDK connector names bind process-local surfaces to Hyprland outputs without
+entering diagnostics. The root reducer owns compositor outputs, workspaces,
+address-bearing clients, active context, and explicit starting, ready, stale,
+or unavailable adapter state. GTK surfaces receive immutable local projections:
+bounded workspace marks plus an active workspace/window label or clock fallback.
 
 ## Configuration
 

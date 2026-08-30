@@ -13,6 +13,21 @@ window.weftwise-surface,
   background: @weftwise_accent;
 }
 
+.weftwise-workspace-mark {
+  min-width: 14px;
+  min-height: 3px;
+  background: alpha(@weftwise_text, 0.42);
+}
+
+.weftwise-workspace-mark.occupied {
+  background: alpha(@weftwise_text, 0.72);
+}
+
+.weftwise-workspace-mark.active {
+  min-width: 22px;
+  background: @weftwise_accent;
+}
+
 button.weftwise-ribbon {
   min-height: 30px;
   padding: 0 16px;

@@ -1,5 +1,6 @@
 //! Layer-shell surface configuration and input-region ownership.
 
+use std::cell::Cell;
 use std::rc::Rc;
 
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
@@ -11,10 +12,10 @@ use relm4::gtk::prelude::*;
 
 use crate::action::AppAction;
 use crate::shell::ExclusiveZone;
-use crate::state::{OutputId, OutputPresentation, PresentationLevel};
+use crate::state::{OutputId, OutputView, PresentationLevel};
 use crate::widgets::{SELVAGE_HEIGHT, SURFACE_HEIGHT, TopEdgeWidgets};
 
-use super::outputs::ShellEvent;
+use super::outputs::{OutputBinding, ShellEvent};
 
 /// Pure input-region rectangle used by native surfaces and deterministic tests.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -45,6 +46,7 @@ pub(crate) struct ManagedSurface {
     pub monitor: gdk::Monitor,
     window: gtk::ApplicationWindow,
     widgets: TopEdgeWidgets,
+    level: Rc<Cell<PresentationLevel>>,
     monitor_handler: Option<glib::SignalHandlerId>,
 }
 
@@ -80,16 +82,17 @@ impl ManagedSurface {
         let widgets = TopEdgeWidgets::new(&window, id, action_sink);
         window.set_child(Some(&widgets.root));
 
-        let layout_sink = shell_sink.clone();
+        let level = Rc::new(Cell::new(PresentationLevel::Selvage));
+        let layout_level = level.clone();
         window.connect_realize(move |window| {
             let Some(surface) = window.surface() else {
                 return;
             };
-            let changed_sink = layout_sink.clone();
-            surface.connect_layout(move |_, _, _| {
-                changed_sink(ShellEvent::GeometryChanged(id));
+            let configured_level = layout_level.clone();
+            surface.connect_layout(move |surface, width, _| {
+                apply_input_region_to_surface(surface, width, configured_level.get(), id, "layout");
             });
-            apply_input_region(window, PresentationLevel::Selvage);
+            apply_input_region(window, PresentationLevel::Selvage, id, "realize");
         });
         let scale_sink = shell_sink.clone();
         window.connect_scale_factor_notify(move |_| {
@@ -108,23 +111,29 @@ impl ManagedSurface {
             monitor: monitor.clone(),
             window,
             widgets,
+            level,
             monitor_handler: Some(monitor_handler),
         }
     }
 
     /// Render state and recompute the GDK input region after every level change.
-    pub fn render(&self, presentation: &OutputPresentation) {
-        self.widgets.render(
-            &self.window,
-            presentation.level(),
-            presentation.reduced_motion(),
-        );
-        self.refresh_input_region(presentation.level());
+    pub fn render(&self, view: &OutputView) {
+        self.widgets.render(&self.window, view);
+        self.refresh_input_region(view.presentation.level());
     }
 
     /// Recompute the current input region after allocation or scale changes.
     pub fn refresh_input_region(&self, level: PresentationLevel) {
-        apply_input_region(&self.window, level);
+        self.level.set(level);
+        apply_input_region(&self.window, level, self.id, "state");
+    }
+
+    /// Bind the GDK surface to compositor state without logging its connector.
+    pub fn binding(&self) -> OutputBinding {
+        OutputBinding {
+            id: self.id,
+            connector: self.monitor.connector().map(|value| value.to_string()),
+        }
     }
 
     /// Destroy the native surface and release compositor ownership.
@@ -137,11 +146,26 @@ impl ManagedSurface {
     }
 }
 
-fn apply_input_region(window: &gtk::ApplicationWindow, level: PresentationLevel) {
+fn apply_input_region(
+    window: &gtk::ApplicationWindow,
+    level: PresentationLevel,
+    output: OutputId,
+    source: &'static str,
+) {
     let Some(surface) = window.surface() else {
         return;
     };
-    let geometry = InputRegionGeometry::for_level(surface.width(), level);
+    apply_input_region_to_surface(&surface, surface.width(), level, output, source);
+}
+
+fn apply_input_region_to_surface(
+    surface: &gdk::Surface,
+    width: i32,
+    level: PresentationLevel,
+    output: OutputId,
+    source: &'static str,
+) {
+    let geometry = InputRegionGeometry::for_level(width, level);
     let region = if geometry.width == 0 {
         cairo::Region::create()
     } else {
@@ -149,6 +173,15 @@ fn apply_input_region(window: &gtk::ApplicationWindow, level: PresentationLevel)
         cairo::Region::create_rectangle(&rectangle)
     };
     surface.set_input_region(Some(&region));
+    tracing::debug!(
+        output = ?output,
+        source,
+        width = geometry.width,
+        height = geometry.height,
+        empty = geometry.width == 0,
+        ?level,
+        "native input region installed"
+    );
 }
 
 #[cfg(test)]

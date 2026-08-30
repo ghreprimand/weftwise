@@ -13,6 +13,7 @@ use thiserror::Error;
 use crate::APPLICATION_ID;
 use crate::action::AppAction;
 use crate::message::{AppMessage, TimerKind};
+use crate::services::{clock, hyprland};
 use crate::shell::outputs::{OutputChanges, ShellEvent, SurfaceError, SurfaceManager};
 use crate::shell::{ProofOptionError, ProofOptions};
 use crate::state::{
@@ -88,6 +89,26 @@ impl SimpleComponent for AppModel {
                 tracing::error!("failed to install the process shutdown signal listener");
             }
         });
+        let hyprland_sender = sender.input_sender().clone();
+        supervisor.spawn_cancellable_adapter(move |cancellation| async move {
+            hyprland::run(
+                move |update| {
+                    let _ = hyprland_sender.send(AppMessage::Hyprland(update));
+                },
+                cancellation,
+            )
+            .await;
+        });
+        let clock_sender = sender.input_sender().clone();
+        supervisor.spawn_cancellable_adapter(move |cancellation| async move {
+            clock::run(
+                move |tick| {
+                    let _ = clock_sender.send(AppMessage::Clock(tick));
+                },
+                cancellation,
+            )
+            .await;
+        });
 
         let animation_watch = AnimationPreferenceWatch::new(sender.input_sender().clone());
         let reduced_motion = init.options.reduced_motion
@@ -115,9 +136,15 @@ impl SimpleComponent for AppModel {
             Ok(mut surfaces) => {
                 let changes = surfaces.reconcile();
                 state.reconcile_outputs(changes.added, changes.removed, reduced_motion);
+                state.bind_outputs(
+                    changes
+                        .bindings
+                        .iter()
+                        .map(|binding| (binding.id, binding.connector.clone())),
+                );
                 for id in state.output_ids() {
-                    if let Some(presentation) = state.output(id) {
-                        surfaces.render(id, presentation);
+                    if let Some(view) = state.output_view(id) {
+                        surfaces.render(id, &view);
                     }
                 }
                 Some(surfaces)
@@ -151,6 +178,11 @@ impl SimpleComponent for AppModel {
         match message {
             AppMessage::Action(action) => self.handle_action(action, &sender),
             AppMessage::Shell(event) => self.handle_shell_event(event),
+            AppMessage::Hyprland(update) => {
+                let outputs = self.state.apply_hyprland_update(update);
+                self.render_outputs(outputs);
+            }
+            AppMessage::Clock(tick) => self.handle_clock(tick),
             AppMessage::TimerElapsed {
                 output,
                 kind,
@@ -168,6 +200,7 @@ impl SimpleComponent for AppModel {
 
 impl AppModel {
     fn handle_action(&mut self, action: AppAction, sender: &ComponentSender<Self>) {
+        tracing::debug!(?action, "received native surface action");
         let (output, input) = match action {
             AppAction::PointerEntered(output) => (output, InteractionInput::PointerEntered),
             AppAction::PointerLeft(output) => (output, InteractionInput::PointerLeft),
@@ -207,8 +240,14 @@ impl AppModel {
             self.timers.cancel_output(*output);
         }
         let added = changes.added.clone();
+        let bindings = changes.bindings;
         self.state
             .reconcile_outputs(changes.added, changes.removed, reduced_motion);
+        self.state.bind_outputs(
+            bindings
+                .into_iter()
+                .map(|binding| (binding.id, binding.connector)),
+        );
         for output in added {
             self.render(output);
         }
@@ -280,11 +319,26 @@ impl AppModel {
     }
 
     fn render(&self, output: OutputId) {
-        if let (Some(surfaces), Some(presentation)) =
-            (self.surfaces.as_ref(), self.state.output(output))
+        if let (Some(surfaces), Some(view)) =
+            (self.surfaces.as_ref(), self.state.output_view(output))
         {
-            surfaces.render(output, presentation);
+            surfaces.render(output, &view);
         }
+    }
+
+    fn render_outputs(&self, outputs: impl IntoIterator<Item = OutputId>) {
+        for output in outputs {
+            self.render(output);
+        }
+    }
+
+    fn handle_clock(&mut self, tick: clock::ClockTick) {
+        let label = glib::DateTime::from_unix_local(tick.unix_seconds)
+            .and_then(|value| value.format("%H:%M"))
+            .map(|value| value.to_string())
+            .unwrap_or_else(|_| "--:--".to_owned());
+        let outputs = self.state.set_clock_label(label);
+        self.render_outputs(outputs);
     }
 
     fn shutdown_owned(&mut self) {

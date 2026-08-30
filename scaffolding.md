@@ -11,7 +11,10 @@ Rust toolchain. Phase 1 native-proof code now owns per-output layer surfaces,
 fixed input geometry, deterministic reveal/dismissal state, and an attached
 Panel. A native Hyprland/Waybar comparison selected `exclusive_zone = -1` for
 physical-edge placement without a new reserved area. Pointer, stacking, and
-focus behavior remain unmeasured.
+focus behavior remain unmeasured. Phase 2 now provides root-owned typed
+compositor state, event-first direct Hyprland socket reconciliation, local
+workspace and active-context rendering, and a boundary-aligned in-process clock.
+Compositor restart behavior remains a native-session check.
 
 ## Name
 
@@ -276,10 +279,12 @@ components do not replace the domain, adapter, or surface ownership layers.
 
 ### Phases 2-4 - Contextual Ribbon and Panel
 
-- Add typed application state and message flow.
-- Connect to Hyprland's event socket and reconcile initial state.
-- Display active window/workspace context.
-- Add clock fallback.
+- Typed application state and message flow are implemented for outputs,
+  workspaces, clients, active context, adapter availability, and presentation.
+- The direct Hyprland adapter connects events first, applies bounded JSON
+  snapshots, and replays buffered address-bearing events before steady state.
+- Local workspace marks, focused active context, and the boundary-aligned clock
+  fallback are implemented as immutable surface projections.
 - Add MPRIS media discovery and playback state over D-Bus.
 - Implement priority-based content arbitration.
 - Add click-to-open Panel behavior and a Hyprland keybinding entry point.

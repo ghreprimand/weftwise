@@ -15,8 +15,10 @@ feedback, and system controls.
 The project is pre-alpha. The repository contains a buildable Rust/Relm4 native
 proof and the design, architecture, and repository-safety documentation. The
 proof implements per-output layer surfaces and the Selvage, Ribbon, and Panel
-interaction model. Real-session placement, pointer pass-through, stacking, and
-focus behavior remain unmeasured until the Hyprland/Waybar checklist passes.
+interaction model. It also contains the typed Phase 2 state core, direct
+Hyprland socket adapter, local workspace/context projections, and in-process
+clock fallback. Corrected pointer delivery, stacking, and focus behavior remain
+unmeasured until the Hyprland/Waybar checklist passes.
 
 ## Interface model
 
@@ -77,8 +79,17 @@ The Phase 1 native proof code provides:
 The proof uses `exclusive_zone = -1`. A public-safe native Hyprland comparison
 beside Waybar showed that `0` and `-1` preserved the existing work area, while
 only `-1` kept every surface at the physical top edge. Pointer pass-through,
-stacking, and focus restoration remain manual acceptance checks. Active
-workspace/window state and clock fallback begin in Phase 2.
+stacking, and focus restoration remain manual acceptance checks.
+
+The Phase 2 state slice connects to Hyprland's event socket before requesting
+bounded JSON snapshots through fresh request connections. It applies the
+snapshot atomically, replays buffered address-bearing events in order, and
+re-resolves the instance after parse gaps, disconnects, or compositor restarts.
+Root state now owns typed outputs, workspaces, clients, active context, adapter
+availability, and GDK connector bindings. Each surface renders only its local
+workspace marks; the focused Ribbon renders active context with a
+boundary-aligned in-process clock fallback. This code has deterministic
+coverage, while a sanitized real-session restart check remains unmeasured.
 
 Claims in project documentation describe implemented behavior only when they
 are accompanied by verification. Planned behavior is labeled as planned.

@@ -11,7 +11,7 @@ use thiserror::Error;
 
 use crate::action::AppAction;
 use crate::shell::ExclusiveZone;
-use crate::state::{OutputId, OutputPresentation, PresentationLevel};
+use crate::state::{OutputId, OutputView, PresentationLevel};
 use crate::widgets;
 
 use super::surface::ManagedSurface;
@@ -32,6 +32,27 @@ pub struct OutputChanges {
     pub added: Vec<OutputId>,
     /// Removed output identities.
     pub removed: Vec<OutputId>,
+    /// Current connector bindings for every retained surface.
+    pub bindings: Vec<OutputBinding>,
+}
+
+/// GDK surface identity bound to a compositor connector.
+#[derive(Clone, Eq, PartialEq)]
+pub struct OutputBinding {
+    /// Process-local surface identity.
+    pub id: OutputId,
+    /// Connector used only for in-process reconciliation.
+    pub connector: Option<String>,
+}
+
+impl std::fmt::Debug for OutputBinding {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("OutputBinding")
+            .field("id", &self.id)
+            .field("connector", &self.connector.as_ref().map(|_| "<redacted>"))
+            .finish()
+    }
 }
 
 /// Native surface initialization failure.
@@ -133,13 +154,15 @@ impl SurfaceManager {
             changes.added.push(id);
         }
 
+        changes.bindings = self.surfaces.iter().map(ManagedSurface::binding).collect();
+
         changes
     }
 
     /// Render one output projection when it still has a native surface.
-    pub fn render(&self, id: OutputId, presentation: &OutputPresentation) {
+    pub fn render(&self, id: OutputId, view: &OutputView) {
         if let Some(surface) = self.surfaces.iter().find(|surface| surface.id == id) {
-            surface.render(presentation);
+            surface.render(view);
         }
     }
 

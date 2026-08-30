@@ -9,7 +9,7 @@ use relm4::gtk::glib;
 use relm4::gtk::prelude::*;
 
 use crate::action::AppAction;
-use crate::state::{OutputId, PresentationLevel};
+use crate::state::{OutputId, OutputView, PresentationLevel};
 
 pub mod active_context;
 pub mod clock;
@@ -42,6 +42,8 @@ pub(crate) struct TopEdgeWidgets {
     /// Root overlay assigned to the layer window.
     pub root: gtk::Overlay,
     revealer: gtk::Revealer,
+    ribbon_label: gtk::Label,
+    selvage_marks: gtk::Box,
     popover: gtk::Popover,
     first_panel_action: gtk::Button,
 }
@@ -60,12 +62,19 @@ impl TopEdgeWidgets {
         root.add_css_class("weftwise-root");
 
         let ribbon_button = gtk::Button::builder()
-            .label("Weftwise")
             .height_request(SURFACE_HEIGHT)
             .hexpand(true)
             .focusable(true)
             .build();
         ribbon_button.add_css_class("weftwise-ribbon");
+
+        let ribbon_label = gtk::Label::builder()
+            .label("--:--")
+            .ellipsize(gtk::pango::EllipsizeMode::End)
+            .hexpand(true)
+            .xalign(0.0)
+            .build();
+        ribbon_button.set_child(Some(&ribbon_label));
 
         let reveal_emit = emit.clone();
         ribbon_button.connect_clicked(move |_| reveal_emit(AppAction::OpenPanel(output)));
@@ -85,6 +94,13 @@ impl TopEdgeWidgets {
             .valign(gtk::Align::Start)
             .build();
         selvage.add_css_class("weftwise-selvage");
+        let selvage_marks = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(2)
+            .hexpand(true)
+            .halign(gtk::Align::Start)
+            .build();
+        selvage.append(&selvage_marks);
         root.add_overlay(&selvage);
 
         let panel_content = gtk::Box::builder()
@@ -150,33 +166,58 @@ impl TopEdgeWidgets {
         });
 
         let motion = gtk::EventControllerMotion::new();
+        motion.set_propagation_phase(gtk::PropagationPhase::Capture);
         let enter_emit = emit.clone();
-        motion.connect_enter(move |_, _, _| enter_emit(AppAction::PointerEntered(output)));
-        motion.connect_leave(move |_| emit(AppAction::PointerLeft(output)));
-        window.add_controller(motion);
+        motion.connect_enter(move |_, _, _| {
+            tracing::debug!(output = ?output, "pointer entered native surface");
+            enter_emit(AppAction::PointerEntered(output));
+        });
+        motion.connect_leave(move |_| {
+            tracing::debug!(output = ?output, "pointer left native surface");
+            emit(AppAction::PointerLeft(output));
+        });
+        root.add_controller(motion);
 
         Self {
             root,
             revealer,
+            ribbon_label,
+            selvage_marks,
             popover,
             first_panel_action,
         }
     }
 
     /// Render one authoritative presentation projection.
-    pub fn render(
-        &self,
-        window: &gtk::ApplicationWindow,
-        level: PresentationLevel,
-        reduced_motion: bool,
-    ) {
-        self.revealer.set_transition_duration(if reduced_motion {
-            0
-        } else {
-            RIBBON_TRANSITION_MILLIS
-        });
+    pub fn render(&self, window: &gtk::ApplicationWindow, view: &OutputView) {
+        let level = view.presentation.level();
+        self.revealer
+            .set_transition_duration(if view.presentation.reduced_motion() {
+                0
+            } else {
+                RIBBON_TRANSITION_MILLIS
+            });
         self.revealer
             .set_reveal_child(level != PresentationLevel::Selvage);
+        self.ribbon_label.set_label(&view.ribbon_label);
+        self.ribbon_label.set_tooltip_text(Some(&view.ribbon_label));
+        while let Some(child) = self.selvage_marks.first_child() {
+            self.selvage_marks.remove(&child);
+        }
+        for workspace in &view.workspaces {
+            let mark = gtk::Box::builder()
+                .width_request(if workspace.active { 22 } else { 14 })
+                .height_request(SELVAGE_HEIGHT)
+                .build();
+            mark.add_css_class("weftwise-workspace-mark");
+            if workspace.active {
+                mark.add_css_class("active");
+            } else if workspace.occupied {
+                mark.add_css_class("occupied");
+            }
+            mark.set_tooltip_text(Some(&workspace.label));
+            self.selvage_marks.append(&mark);
+        }
 
         if level == PresentationLevel::Panel {
             window.set_keyboard_mode(KeyboardMode::OnDemand);

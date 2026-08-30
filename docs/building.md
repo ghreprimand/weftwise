@@ -91,6 +91,21 @@ four-output session showed physical-top placement without a new reserved area.
 Do not infer pointer pass-through, focus restoration, or stacking from
 automated state tests.
 
+## Phase 2 Hyprland adapter
+
+The adapter uses the active session's `XDG_RUNTIME_DIR` and
+`HYPRLAND_INSTANCE_SIGNATURE` only to resolve Hyprland's request and event
+sockets. Their values and derived paths never enter normal diagnostics. Missing
+or invalid values produce an explicit unavailable state. No `hyprctl` polling
+process is used for primary state.
+
+The event socket is connected before the initial JSON snapshot. Request
+connections are fresh, strictly timed, and limited to 1 MiB each. Event lines
+are limited to 64 KiB, while the initial race buffer is limited to 512 known
+events and 256 KiB of source data. A parse or truncation gap triggers new path
+discovery and a full snapshot. Synthetic parser and reducer tests do not replace
+a sanitized compositor restart check in a native session.
+
 ## Required gates
 
 Run the complete local gate with full output retained below the ignored

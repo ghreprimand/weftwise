@@ -33,7 +33,10 @@ The line brightens when the pointer reaches the top edge. Holding there for the
 configured dwell time reveals a 26-30 pixel Ribbon. Moving into the Ribbon keeps
 it open; leaving starts the dismissal timer.
 
-The Ribbon labels the selected context and exposes its actions. A volume change
+The Ribbon labels the selected context and exposes its actions. The implemented
+Hyprland projection shows the active workspace and bounded window title on the
+focused output, and uses a boundary-aligned local clock when compositor context
+is absent. A volume change
 selects audio temporarily. Media playback can show title and transport controls.
 A privacy event can replace ordinary content. The fallback is time, date,
 current workspace, and active application.
@@ -75,7 +78,9 @@ ordinary media or clock content.
 
 ## Multi-output behavior
 
-Each output owns a Selvage and displays its local workspace marks. Pointer reveal
+Each output owns a Selvage and displays its local workspace marks. GDK connector
+identity binds each surface to its matching Hyprland output, and only the
+globally active workspace receives the active mark. Pointer reveal
 occurs on the output being touched. Keyboard invocation opens the Panel on the
 focused output. Global activity can place a status mark on every Selvage, but
 labels appear only on the active output unless configured otherwise.

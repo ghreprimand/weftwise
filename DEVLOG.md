@@ -34,6 +34,71 @@ rejects a wildcard safe-directory exception.
 
 - Continue the Phase 2 state and Hyprland integration landing after CI is green.
 
+## 2026-08-30 - Add the Phase 2 state and Hyprland core
+
+The root reducer now owns typed compositor outputs, workspaces, address-bearing
+clients, active context, adapter availability, GDK connector bindings, and the
+existing presentation state. Untrusted connector names, client addresses,
+classes, workspace names, and window titles are validated, bounded, sanitized,
+and redacted from default debug formatting. Retained snapshots remain visible
+as explicitly stale state during reconnect rather than being presented as
+current or discarded without distinction.
+
+The Hyprland adapter uses the request and event sockets directly. Each attempt
+re-resolves the active instance without logging its identifier or paths,
+connects the event socket first, and buffers parsed events while five bounded
+JSON snapshots are read through fresh request connections with strict
+deadlines. The root receives the atomic snapshot before buffered events replay
+in wire order. Event records split only at the first `>>`; address-bearing v2
+forms are preferred where available. Hyprland's address-bearing `openwindow`
+event is parsed directly, and its workspace name is reconciled to the stable
+numeric identity from the current snapshot. Unknown events are ignored, while
+malformed recognized events, truncated or oversized reads, buffer overflow,
+identity gaps, and monitor changes force a new snapshot after bounded
+exponential backoff with jitter.
+
+GDK connector identity maps each layer surface to local Hyprland state. The
+Selvage renders bounded local workspace marks, and the focused Ribbon renders
+the active workspace plus bounded window title. A separate supervised clock
+adapter publishes an immediate value and then aligns updates to wall-clock
+minute boundaries without a subprocess. Both adapters receive owned
+cancellation, and failure or reconnect in one does not stop the other.
+Synchronous shutdown broadcasts cancellation, waits for a bounded
+100-millisecond cooperative grace, and aborts only unfinished stragglers.
+
+### Verification
+
+- Eighteen new Phase 2 parser, reducer, clock, backoff, and cancellation tests
+  pass. The supervisor cancellation regression passed ten consecutive focused
+  runs after the bounded cooperative shutdown fix.
+- The Tokio macros feature adds only `tokio-macros`; the graph retains one Tokio
+  runtime and one gtk4-rs line. The complete worktree gate passes with the exact
+  Rust 1.96.0 toolchain, including formatting, deny-warning Clippy, 50 tests,
+  documentation, dependency topology, public-safety automation, and RustSec.
+- Synthetic tests cover structured snapshots, first-delimiter event parsing,
+  unknown and malformed events, bounded event buffering and ordered replay,
+  unsafe instance leaves, redacted errors, atomic reducer updates, local output
+  projections, client lifecycle counts, stale availability, deterministic
+  backoff, cooperative cancellation, minute-boundary calculations, paired
+  legacy/v2 events, negative special-workspace identities, and forced
+  re-snapshot when an `openwindow` workspace name cannot be reconciled.
+- A native Hyprland run connected through the direct adapter but repeatedly
+  requested fresh snapshots because paired legacy events were treated as gaps
+  even when their address-bearing v2 counterparts followed. Paired legacy
+  workspace, focused-output, move, and title events are now ignored; genuine
+  monitor or identity gaps still force a snapshot. Stable native delivery and
+  compositor restart remain unmeasured. No runtime paths, output identifiers,
+  window text, or client addresses were captured.
+
+### Next
+
+- Exercise event-first startup and compositor restart in a native session using
+  only sanitized counts and availability transitions as evidence.
+- Complete the corrected pointer-reveal and remaining Phase 1 manual checklist
+  before treating the surface interaction proof as accepted.
+- Begin the pure context arbitration reducer after the Phase 2 landing is
+  reviewed.
+
 ## 2026-08-30 - Implement the Phase 1 native surface proof
 
 The application now owns one top-anchored overlay-layer window per current GDK
@@ -56,6 +121,19 @@ lifecycle without exposing monitor metadata. GLib timer sources, the monitor
 signal, layer windows, the GTK animation preference signal, the Tokio shutdown
 listener, and adapter handles all have explicit owners and shutdown paths. GTK
 objects remain on the main thread; background work sends typed messages only.
+
+A later native run exposed a reveal regression even though compositor geometry
+and stacking were correct. The initial render installed the required empty
+pre-layout input region, but the GDK layout callback discarded its authoritative
+width and deferred refresh through the root message queue. Region installation
+now occurs synchronously from each layout callback's logical width, with the
+current presentation level retained for reconfiguration. Motion observation is
+attached in capture phase to the fixed-height root widget rather than the layer
+window. Public-safe debug diagnostics record only the process-local output ID,
+interaction kind, region dimensions, level, and update source. A native rerun
+of the corrected binary confirmed that holding the pointer at the physical edge
+reveals the Ribbon. The remaining pointer pass-through, dismissal, focus, and
+stacking rows are independent checks.
 
 The native Hyprland/Waybar comparison selected zone `-1`, which is now the
 default. Both `0` and `-1` left the existing reserved work area unchanged, but
@@ -84,9 +162,14 @@ Invalid switch values produce redacted startup errors.
   zone `0` placed none there. Neither changed the reserved-area fingerprint.
   Corrected surfaces spanned every output in logical coordinates and shut down
   without GTK child-finalization warnings.
-- Pointer pass-through, dwell interaction, stacking, fullscreen behavior,
-  outside click, and prior-client focus restoration remain unmeasured acceptance
-  checks rather than product claims.
+- Corrected physical-edge dwell reveal: passed in the native session that
+  reproduced the failure.
+- Pointer pass-through, stacking, fullscreen behavior, outside click, and
+  prior-client focus restoration remain unmeasured acceptance checks rather
+  than product claims.
+- The post-landing synchronous region/capture-phase correction passes the
+  deterministic and deny-warning local gates; operator confirmation closed the
+  reveal regression.
 
 ### Next
 
