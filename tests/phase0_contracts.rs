@@ -117,3 +117,49 @@ fn relm_runtime_limits_match_the_initial_resource_contract() {
     assert_eq!(ASYNC_WORKER_LIMIT, 1);
     assert_eq!(BLOCKING_WORKER_LIMIT, 4);
 }
+
+#[test]
+fn ci_workflow_keeps_immutable_and_non_persistent_inputs() {
+    let workflow = include_str!("../.github/workflows/ci.yml");
+
+    assert!(workflow.contains("image: archlinux:base-devel@sha256:"));
+    assert!(workflow.contains("persist-credentials: false"));
+
+    for line in workflow.lines() {
+        let trimmed = line.trim_start();
+        if let Some(action) = trimmed.strip_prefix("uses: ") {
+            let (_, revision) = action
+                .split_once('@')
+                .expect("external actions must include a revision");
+            let revision = revision.split_whitespace().next().expect("action revision");
+            assert_eq!(revision.len(), 40, "actions must use full commit SHAs");
+            assert!(
+                revision.bytes().all(|byte| byte.is_ascii_hexdigit()),
+                "action revision must be hexadecimal"
+            );
+        }
+    }
+
+    let lines: Vec<_> = workflow.lines().collect();
+    for (index, line) in lines.iter().enumerate() {
+        let indentation = line.len() - line.trim_start().len();
+        if !line.trim_start().starts_with("run:") {
+            continue;
+        }
+
+        assert!(
+            !line.contains("${{"),
+            "expression opener in run declaration"
+        );
+        for nested in lines.iter().skip(index + 1) {
+            if nested.trim().is_empty() {
+                continue;
+            }
+            let nested_indentation = nested.len() - nested.trim_start().len();
+            if nested_indentation <= indentation {
+                break;
+            }
+            assert!(!nested.contains("${{"), "expression opener in run block");
+        }
+    }
+}

@@ -6,6 +6,29 @@ or unmeasured. Planned work is never presented as implemented behavior.
 
 ---
 
+## 2026-08-30 - Harden Phase 0 CI inputs
+
+The Linux gate now starts from a reviewed Arch `base-devel` image digest instead
+of a mutable image tag. The only external action remains checkout at a reviewed
+full commit SHA, and its credentials are removed after the source is fetched.
+Container commands use Bash explicitly. Rust and native GTK versions are
+reported before the repository gate runs.
+
+### Verification
+
+- The first worktree gate stopped at `cargo fmt --check` after the CI contract
+  test was added. Formatting was applied before the complete gate reran.
+- `bash .github/scripts/check.sh --worktree`: passed with Rust 1.97.1 and 16
+  tests; zero failed, ignored, or measured.
+- The pinned Arch image, package sequence, Rust 1.96.0 toolchain, native-library
+  preflight, and `bash .github/scripts/check.sh --tree` completed successfully in
+  an isolated container.
+- Checkout source and release metadata identify the pinned commit as the signed
+  v7.0.1 release.
+- Workflow `run:` blocks contain no GitHub expression opener.
+- Linux CI remains unmeasured until the workflow runs on GitHub-hosted
+  infrastructure.
+
 ## 2026-08-30 - Add the Phase 0 Rust scaffold
 
 The repository now contains a Rust 2024 crate with the retained application,

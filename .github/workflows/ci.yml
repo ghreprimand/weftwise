@@ -7,18 +7,24 @@ on:
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
   rust:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     container:
-      image: archlinux:base-devel
+      image: archlinux:base-devel@sha256:a26046b7363dad8e2614858f4313949ae9b05c9c5f31de343a54864b9e20806f # base-devel-20260823.0.578598
     env:
       CARGO_BUILD_JOBS: 4
       RUST_TEST_THREADS: 1
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install native libraries and audit tooling
         run: pacman -Syu --noconfirm --needed git gtk4 gtk4-layer-shell rustup cargo-audit pkgconf
@@ -26,7 +32,11 @@ jobs:
       - name: Install pinned Rust toolchain
         run: |
           rustup toolchain install 1.96.0 --profile minimal --component clippy,rustfmt
-          rustup default 1.96.0
+          rustc --version --verbose
+          cargo --version
+
+      - name: Verify native libraries
+        run: pkg-config --modversion gtk4 gtk4-layer-shell-0
 
       - name: Run repository gates
         run: bash .github/scripts/check.sh --tree
