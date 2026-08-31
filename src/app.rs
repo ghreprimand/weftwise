@@ -3,6 +3,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use relm4::gtk;
 use relm4::gtk::glib;
@@ -26,6 +27,8 @@ use crate::state::{
     InteractionInput, InteractionToken, OutputId,
 };
 use crate::supervisor::{RuntimeConfigurationError, Supervisor, configure_relm_runtime};
+
+const REVEAL_DOUBLE_TAP_WINDOW: Duration = Duration::from_millis(500);
 
 /// Errors that prevent the application from starting.
 #[derive(Debug, Error)]
@@ -64,6 +67,7 @@ struct AppModel {
     supervisor: Supervisor,
     surfaces: Option<SurfaceManager>,
     timers: UiTimers,
+    reveal_taps: RevealTapTracker,
     animation_watch: Option<AnimationPreferenceWatch>,
     media_commands: tokio::sync::mpsc::Sender<MediaCommand>,
     #[cfg(feature = "audio-transport")]
@@ -257,6 +261,7 @@ impl SimpleComponent for AppModel {
             supervisor,
             surfaces,
             timers: UiTimers::default(),
+            reveal_taps: RevealTapTracker::default(),
             animation_watch,
             media_commands,
             #[cfg(feature = "audio-transport")]
@@ -301,7 +306,7 @@ impl SimpleComponent for AppModel {
                 token,
             } => self.handle_timer(output, kind, token, &sender),
             AppMessage::AnimationPreferenceChanged => self.update_motion_preference(&sender),
-            AppMessage::RevealRibbon => self.reveal_focused_ribbon(&sender),
+            AppMessage::RevealRibbon => self.handle_reveal_shortcut(&sender),
             AppMessage::Shutdown => self.shutdown_owned(),
         }
     }
@@ -456,13 +461,18 @@ impl AppModel {
         }
     }
 
-    fn reveal_focused_ribbon(&mut self, sender: &ComponentSender<Self>) {
+    fn handle_reveal_shortcut(&mut self, sender: &ComponentSender<Self>) {
         let output = self
             .state
             .focused_output()
             .or_else(|| self.state.output_ids().next());
         if let Some(output) = output {
-            self.apply_interaction(output, InteractionInput::RevealForGlance, sender);
+            let input = if self.reveal_taps.register(Instant::now()) {
+                InteractionInput::OpenPanel
+            } else {
+                InteractionInput::RevealForGlance
+            };
+            self.apply_interaction(output, input, sender);
         }
     }
 
@@ -533,6 +543,46 @@ impl Drop for AppModel {
             startup_failed = self.startup_failure.borrow().is_some(),
             "root model stopped"
         );
+    }
+}
+
+#[derive(Default)]
+struct RevealTapTracker {
+    last: Option<Instant>,
+}
+
+impl RevealTapTracker {
+    fn register(&mut self, now: Instant) -> bool {
+        let double_tap = self
+            .last
+            .is_some_and(|last| now.duration_since(last) <= REVEAL_DOUBLE_TAP_WINDOW);
+        self.last = (!double_tap).then_some(now);
+        double_tap
+    }
+}
+
+#[cfg(test)]
+mod reveal_tap_tests {
+    use super::*;
+
+    #[test]
+    fn second_tap_inside_the_window_promotes_once() {
+        let start = Instant::now();
+        let mut tracker = RevealTapTracker::default();
+
+        assert!(!tracker.register(start));
+        assert!(tracker.register(start + Duration::from_millis(400)));
+        assert!(!tracker.register(start + Duration::from_millis(450)));
+    }
+
+    #[test]
+    fn separated_taps_each_start_a_new_pair() {
+        let start = Instant::now();
+        let mut tracker = RevealTapTracker::default();
+
+        assert!(!tracker.register(start));
+        assert!(!tracker.register(start + Duration::from_millis(501)));
+        assert!(tracker.register(start + Duration::from_millis(1_000)));
     }
 }
 

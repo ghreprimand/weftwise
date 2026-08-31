@@ -6,6 +6,23 @@ or unmeasured. Planned work is never presented as implemented behavior.
 
 ---
 
+## 2026-08-31 - Add double-tap keyboard pinning
+
+Two `weftwise reveal` requests received within 500 milliseconds now promote the
+focused-output keyboard glance into the existing pinned Panel state. A single
+request retains the 2.5-second Ribbon glance. The second request uses the same
+typed Panel-open transition as clicking the Ribbon, so outside click, Escape,
+focus handling, and generation-checked timer invalidation retain one ownership
+path. Hyprland continues to own the configurable global key binding.
+
+Deterministic tests cover taps inside and outside the recognition window and
+the glance-to-Panel reducer transition. The complete host gate passed with 130
+runnable library tests and one explicitly ignored live-system-bus test; the
+transport-free suite passed 129 with the same ignore. All integration suites,
+warnings-denied Clippy, documentation, file-size and dependency-topology
+checks, RustSec across 172 dependencies, and worktree public-safety passed.
+Native operator acceptance remains open.
+
 ## 2026-08-31 - Preserve focused context and authoritative Panel dismissal
 
 The Panel close button now emits only the typed close action and leaves popover

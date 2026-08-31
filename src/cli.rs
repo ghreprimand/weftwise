@@ -28,6 +28,7 @@ pub const USAGE: &str = "Usage:\n\
   weftwise activity cancel <id>\n\
 \n\
 Activity kinds: timer, build, download, render, command-result.\n\
+Invoke `weftwise reveal` twice within 500 ms to open the pinned Panel.\n\
 Labels are bounded display data. Commands, argument vectors, and shell strings are not accepted.";
 
 /// Parsed command that has not yet touched GTK, D-Bus, or the local endpoint.

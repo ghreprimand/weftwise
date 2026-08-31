@@ -260,9 +260,11 @@ The separate `weftwise reveal` command uses GApplication's session-bus remote
 action mechanism rather than the activity schema. The primary GTK application
 exports a parameter-free action and maps it to a root message. Root state
 selects the Hyprland-focused output and applies a generation-checked 2.5-second
-Ribbon glance. Pointer entry invalidates that dismissal generation and returns
-ownership to the ordinary interaction reducer. Hyprland remains the global
-shortcut owner, so key selection is configuration rather than a GTK grab.
+Ribbon glance. A second request within 500 milliseconds applies the existing
+typed Panel-open transition and invalidates the glance dismissal. Pointer entry
+also invalidates that dismissal generation and returns ownership to the
+ordinary interaction reducer. Hyprland remains the global shortcut owner, so
+key selection is configuration rather than a GTK grab.
 
 ## Temporary feedback
 

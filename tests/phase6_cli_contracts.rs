@@ -82,6 +82,7 @@ fn help_documents_display_data_and_no_command_string_surface() {
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).expect("UTF-8 help");
     assert!(stdout.contains("weftwise reveal"));
+    assert!(stdout.contains("twice within 500 ms"));
     assert!(stdout.contains("activity publish"));
     assert!(stdout.contains("shell strings are not accepted"));
     assert!(output.stderr.is_empty());

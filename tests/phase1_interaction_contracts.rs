@@ -95,6 +95,20 @@ fn dismissal_is_cancelled_by_reentry_and_stale_timers_cannot_collapse() {
 }
 
 #[test]
+fn second_keyboard_tap_promotes_the_glance_to_a_pinned_panel() {
+    let mut state = OutputPresentation::new(false);
+
+    let effects = state.update(InteractionInput::RevealForGlance);
+    assert!(effects.contains(&InteractionEffect::Render));
+    assert_eq!(state.level(), PresentationLevel::Ribbon);
+    assert_eq!(
+        state.update(InteractionInput::OpenPanel),
+        [InteractionEffect::Render]
+    );
+    assert_eq!(state.level(), PresentationLevel::Panel);
+}
+
+#[test]
 fn panel_can_only_open_from_ribbon_and_closes_to_pointer_appropriate_level() {
     let mut state = OutputPresentation::new(false);
 
