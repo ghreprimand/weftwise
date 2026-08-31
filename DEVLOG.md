@@ -36,7 +36,7 @@ snapshot resets the count to unknown before buffered v2 events replay.
 - The same complete default and feature gates pass with exact Rust 1.96.0 in
   the digest-pinned Arch environment against PipeWire 1.6.8, `libspa-0.2`, GTK
   4.22.4, and gtk4-layer-shell 1.3.0.
-- Hosted verification remains pending for this landing.
+- GitHub Actions run 33345014212 passed commit `60d46db`.
 
 ### Next
 
