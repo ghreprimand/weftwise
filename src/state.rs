@@ -720,6 +720,8 @@ pub struct InteractionToken(u64);
 pub enum InteractionInput {
     /// Pointer entered the active top-edge region.
     PointerEntered,
+    /// Pointer entered a bounded internal corner that cannot sustain edge dwell.
+    PointerEnteredImmediate,
     /// Pointer left the active visible region.
     PointerLeft,
     /// A previously scheduled dwell timer completed.
@@ -788,6 +790,7 @@ impl OutputPresentation {
     pub fn update(&mut self, input: InteractionInput) -> Vec<InteractionEffect> {
         match input {
             InteractionInput::PointerEntered => self.pointer_entered(),
+            InteractionInput::PointerEnteredImmediate => self.pointer_entered_immediate(),
             InteractionInput::PointerLeft => self.pointer_left(),
             InteractionInput::DwellElapsed(token) => self.dwell_elapsed(token),
             InteractionInput::DismissElapsed(token) => self.dismiss_elapsed(token),
@@ -802,6 +805,17 @@ impl OutputPresentation {
         let token = self.next_token();
         if self.level == PresentationLevel::Selvage {
             vec![InteractionEffect::ScheduleDwell(token)]
+        } else {
+            Vec::new()
+        }
+    }
+
+    fn pointer_entered_immediate(&mut self) -> Vec<InteractionEffect> {
+        self.pointer_inside = true;
+        self.next_token();
+        if self.level == PresentationLevel::Selvage {
+            self.level = PresentationLevel::Ribbon;
+            vec![InteractionEffect::Render]
         } else {
             Vec::new()
         }

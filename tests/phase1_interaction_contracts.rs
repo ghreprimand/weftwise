@@ -43,6 +43,18 @@ fn dwell_reveal_requires_the_current_timer_and_an_inside_pointer() {
 }
 
 #[test]
+fn internal_corner_entry_reveals_without_a_dwell_timer() {
+    let mut state = OutputPresentation::new(false);
+
+    assert_eq!(
+        state.update(InteractionInput::PointerEnteredImmediate),
+        [InteractionEffect::Render]
+    );
+    assert_eq!(state.level(), PresentationLevel::Ribbon);
+    assert!(state.pointer_inside());
+}
+
+#[test]
 fn dismissal_is_cancelled_by_reentry_and_stale_timers_cannot_collapse() {
     let mut state = OutputPresentation::new(false);
     let dwell = scheduled_dwell(state.update(InteractionInput::PointerEntered));
@@ -149,6 +161,7 @@ fn input_regions_are_fixed_to_visible_height_and_start_empty_before_layout() {
         x: 400,
         width: 96,
         height: 8,
+        immediate: false,
     };
     assert_eq!(
         InputRegionGeometry::for_level(0, PresentationLevel::Selvage, activation),

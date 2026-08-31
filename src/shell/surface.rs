@@ -114,6 +114,8 @@ pub struct ActivationRegion {
     pub width: i32,
     /// Bounded island height.
     pub height: i32,
+    /// Reveal on entry because both adjoining edges are internal to the layout.
+    pub immediate: bool,
 }
 
 /// Pure output rectangle used to select exposed top-edge segments.
@@ -159,6 +161,7 @@ pub fn activation_region(
             x: 0,
             width: target.width,
             height,
+            immediate: false,
         };
     }
 
@@ -167,7 +170,7 @@ pub fn activation_region(
     let mut covered = outputs
         .iter()
         .filter(|other| *other != &target)
-        .filter(|other| other.y.saturating_add(other.height) == target.y)
+        .filter(|other| other.y.saturating_add(other.height).abs_diff(target.y) <= 2)
         .filter_map(|other| {
             let start = other.x.max(target_start);
             let end = other.x.saturating_add(other.width).min(target_end);
@@ -187,6 +190,13 @@ pub fn activation_region(
     if cursor < target_end {
         exposed.push((cursor, target_end));
     }
+    let top_edge_is_internal = exposed.is_empty();
+    let right_edge_is_internal = outputs.iter().any(|other| {
+        other != &target
+            && other.x.abs_diff(target_end) <= 2
+            && other.y < target.y.saturating_add(SURFACE_HEIGHT)
+            && other.y.saturating_add(other.height) > target.y
+    });
     let (start, end) = exposed
         .into_iter()
         .max_by_key(|(start, end)| (end - start, *start))
@@ -203,6 +213,7 @@ pub fn activation_region(
         x: global_x.saturating_sub(target.x),
         width,
         height,
+        immediate: top_edge_is_internal && right_edge_is_internal,
     }
 }
 
@@ -214,6 +225,7 @@ pub(crate) struct ManagedSurface {
     widgets: TopEdgeWidgets,
     level: Rc<Cell<PresentationLevel>>,
     activation: Rc<Cell<ActivationRegion>>,
+    immediate_corner: Rc<Cell<bool>>,
     monitor_handler: Option<glib::SignalHandlerId>,
 }
 
@@ -247,7 +259,8 @@ impl ManagedSurface {
         window.set_exclusive_zone(zone.value());
         window.set_keyboard_mode(KeyboardMode::None);
 
-        let widgets = TopEdgeWidgets::new(&window, id, action_sink);
+        let immediate_corner = Rc::new(Cell::new(activation.immediate));
+        let widgets = TopEdgeWidgets::new(&window, id, immediate_corner.clone(), action_sink);
         window.set_child(Some(&widgets.root));
 
         let level = Rc::new(Cell::new(PresentationLevel::Selvage));
@@ -297,6 +310,7 @@ impl ManagedSurface {
             widgets,
             level,
             activation,
+            immediate_corner,
             monitor_handler: Some(monitor_handler),
         }
     }
@@ -316,6 +330,7 @@ impl ManagedSurface {
     /// Replace the collapsed activation island after output layout changes.
     pub fn set_activation_region(&self, activation: ActivationRegion) {
         self.activation.set(activation);
+        self.immediate_corner.set(activation.immediate);
         self.refresh_input_region(self.level.get());
     }
 
@@ -392,6 +407,7 @@ mod tests {
             x: 1200,
             width: 96,
             height: 8,
+            immediate: false,
         };
         assert_eq!(
             InputRegionGeometry::for_level(1920, PresentationLevel::Selvage, activation),
@@ -453,6 +469,7 @@ mod tests {
                 x: 292,
                 width: 96,
                 height: 12,
+                immediate: false,
             }
         );
     }
@@ -475,6 +492,7 @@ mod tests {
                 x: 0,
                 width: 320,
                 height: 12,
+                immediate: false,
             }
         );
     }
@@ -485,6 +503,7 @@ mod tests {
             x: 400,
             width: 96,
             height: 12,
+            immediate: false,
         };
         assert_eq!(
             InputRegionGeometry::right_edge_leg(1920, PresentationLevel::Selvage, activation,),
@@ -499,5 +518,53 @@ mod tests {
             InputRegionGeometry::right_edge_leg(1920, PresentationLevel::Ribbon, activation,).width,
             0
         );
+    }
+
+    #[test]
+    fn fully_internal_corner_uses_immediate_entry_with_fractional_rounding_tolerance() {
+        let target = OutputRectangle {
+            x: 100,
+            y: 101,
+            width: 400,
+            height: 200,
+        };
+        let above = OutputRectangle {
+            x: 100,
+            y: 0,
+            width: 400,
+            height: 100,
+        };
+        let right = OutputRectangle {
+            x: 501,
+            y: 101,
+            width: 200,
+            height: 200,
+        };
+        let region = activation_region(
+            target,
+            &[target, above, right],
+            &ActivationConfig::default(),
+        );
+        assert!(region.immediate);
+    }
+
+    #[test]
+    fn physical_edge_keeps_dwell_even_when_the_top_edge_is_internal() {
+        let target = OutputRectangle {
+            x: 100,
+            y: 100,
+            width: 400,
+            height: 200,
+        };
+        let above = OutputRectangle {
+            x: 100,
+            y: 0,
+            width: 400,
+            height: 100,
+        };
+
+        let region = activation_region(target, &[target, above], &ActivationConfig::default());
+
+        assert!(!region.immediate);
     }
 }

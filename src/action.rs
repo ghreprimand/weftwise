@@ -8,6 +8,8 @@ use crate::state::OutputId;
 pub enum AppAction {
     /// Pointer entered an output's currently active region.
     PointerEntered(OutputId),
+    /// Pointer entered a bounded internal corner that cannot sustain edge dwell.
+    PointerEnteredImmediate(OutputId),
     /// Pointer left an output's currently active region.
     PointerLeft(OutputId),
     /// Explicitly open the Panel on an output whose Ribbon is visible.

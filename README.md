@@ -91,8 +91,10 @@ At startup, the native surface reads the bounded versioned XDG configuration.
 It supports exposed-edge or full-width activation, three persistent Ribbon
 regions, and validated semantic color, typography, and radius tokens. A narrow
 right-edge leg makes the default trigger reachable horizontally when the top
-edge is internal to a stacked output layout. The default charcoal/coral
-treatment is intentionally neutral; copy
+edge is internal to a stacked output layout. When both adjoining edges lead
+directly into other outputs, topology detection reveals on bounded entry
+instead of requiring an impossible physical-edge dwell. The default
+charcoal/coral treatment is intentionally neutral; copy
 `config/example.toml` into the XDG configuration location to customize it.
 
 The Phase 2 state slice connects to Hyprland's event socket before requesting

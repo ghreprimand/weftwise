@@ -317,8 +317,13 @@ The collapsed region also includes a narrow leg down the right edge of the
 fixed 30-pixel surface. It can be entered horizontally, so a lower output whose
 entire top edge leads into another monitor does not require an impossible
 physical-edge dwell. The leg disappears with the rest of the collapsed input
-region when the Ribbon opens. Collapsed workspace and status marks are hidden
-at the same transition instead of overlaying Ribbon content.
+region when the Ribbon opens. When the target's top edge and right edge both
+adjoin other outputs, the surface emits an immediate-entry action rather than
+scheduling a dwell that pointer traversal cannot complete. GDK logical
+rectangles and a two-pixel fractional-layout tolerance determine adjacency, so
+the rule has no connector, resolution, or machine-specific cases. Collapsed
+workspace and status marks are hidden at the same transition instead of
+overlaying Ribbon content.
 
 The native proof defaults to `exclusive_zone = -1` and retains `0` as a manual
 comparison value. A native four-output Hyprland session with Waybar showed that

@@ -41,9 +41,13 @@ comparison and rollback mode.
 
 A narrow leg extends down the right edge of the fixed-height surface. This
 second way into the same dwell state can be entered horizontally and remains
-reachable when another output covers the entire top edge. Once the Ribbon is
-visible, the collapsed workspace and status marks are hidden so they cannot
-overlay its three text regions.
+reachable when another output covers the entire top edge. If both the top edge
+and this right edge are internal to the monitor layout, entry reveals
+immediately because pointer motion into a neighboring output cannot sustain a
+dwell. Physical-edge layouts retain the configured dwell. Adjacency is derived
+from GDK logical output rectangles with a small rounding tolerance, not output
+names or resolutions. Once the Ribbon is visible, the collapsed workspace and
+status marks are hidden so they cannot overlay its three text regions.
 
 The Ribbon has persistent workspace, context, and clock regions. The context
 region labels the selected candidate or active client and exposes its actions.

@@ -18,6 +18,14 @@ remains bounded and configurable. Collapsed workspace and status marks are now
 hidden while the Ribbon or Panel is visible, removing the mark group that
 overlaid the top-left Ribbon content.
 
+Follow-up testing on a fractionally scaled output exposed a second topology:
+both the selected top edge and the right edge led directly into neighboring
+outputs, so GTK delivered entry and departure before the dwell could finish.
+Such fully internal corners now reveal on bounded entry. Physical-edge layouts
+keep the configured dwell. The decision comes from GDK logical rectangles with
+a two-pixel rounding tolerance and contains no output name, resolution, or
+machine-specific case.
+
 Verified with the complete host default gate, the native `audio-transport`
 Clippy/test/documentation gate, and the digest-pinned Arch baseline under Rust
 1.96.0. Formatting, warnings-denied Clippy, default and feature tests,

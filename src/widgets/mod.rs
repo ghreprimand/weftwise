@@ -1,6 +1,6 @@
 //! Relm4 presentation components.
 
-use std::rc::Rc;
+use std::{cell::Cell, rc::Rc};
 
 use gtk4_layer_shell::{KeyboardMode, LayerShell};
 use relm4::gtk;
@@ -89,6 +89,7 @@ impl TopEdgeWidgets {
     pub fn new(
         window: &gtk::ApplicationWindow,
         output: OutputId,
+        immediate_corner: Rc<Cell<bool>>,
         emit: Rc<dyn Fn(AppAction)>,
     ) -> Self {
         let root = gtk::Overlay::builder()
@@ -274,7 +275,11 @@ impl TopEdgeWidgets {
         let enter_emit = emit.clone();
         motion.connect_enter(move |_, _, _| {
             tracing::debug!(output = ?output, "pointer entered native surface");
-            enter_emit(AppAction::PointerEntered(output));
+            enter_emit(if immediate_corner.get() {
+                AppAction::PointerEnteredImmediate(output)
+            } else {
+                AppAction::PointerEntered(output)
+            });
         });
         motion.connect_leave(move |_| {
             tracing::debug!(output = ?output, "pointer left native surface");

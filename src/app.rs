@@ -285,6 +285,9 @@ impl AppModel {
         tracing::debug!(?action, "received native surface action");
         let (output, input) = match action {
             AppAction::PointerEntered(output) => (output, InteractionInput::PointerEntered),
+            AppAction::PointerEnteredImmediate(output) => {
+                (output, InteractionInput::PointerEnteredImmediate)
+            }
             AppAction::PointerLeft(output) => (output, InteractionInput::PointerLeft),
             AppAction::OpenPanel(output) => (output, InteractionInput::OpenPanel),
             AppAction::ClosePanel(output) => (output, InteractionInput::ClosePanel),
