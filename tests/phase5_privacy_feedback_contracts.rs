@@ -1,7 +1,11 @@
 use weftwise::context::arbitration::Severity;
 use weftwise::context::feedback::{FeedbackEvent, FeedbackKind};
 use weftwise::context::privacy::{PrivacyEvidence, PrivacyState, PrivacyUpdate};
-use weftwise::state::{AppState, MarkPattern, MarkShape, OutputId};
+use weftwise::services::audio::{
+    AudioCapabilities, AudioCommandKind, AudioDirection, AudioNode, AudioNodeId, AudioUpdate,
+    AudioVolume, MAX_AUDIO_NAME_CHARACTERS, MAX_AUDIO_NODES,
+};
+use weftwise::state::{AdapterAvailability, AppState, MarkPattern, MarkShape, OutputId};
 
 fn state_with_output(id: u64) -> (AppState, OutputId) {
     let output = OutputId::new(id);
@@ -215,4 +219,179 @@ fn dismissible_feedback_has_actions_and_explicit_dismissal_clears_it() {
     let dismissed = state.output_view(output).expect("dismissed result");
     assert!(dismissed.activity.is_empty());
     assert!(dismissed.candidate_actions.is_empty());
+}
+
+fn synthetic_audio_node(id: u32, direction: AudioDirection, volume: u32, muted: bool) -> AudioNode {
+    AudioNode::bounded(
+        AudioNodeId::new(id),
+        direction,
+        &format!("synthetic-{id}"),
+        "Synthetic audio device",
+        AudioVolume::from_linear_millis(volume),
+        muted,
+        true,
+    )
+}
+
+#[test]
+fn audio_snapshot_is_bounded_and_establishes_state_before_following_deltas() {
+    let (mut state, output) = state_with_output(66);
+    let long_name = format!("synthetic\u{200b}-{}", "x".repeat(300));
+    let mut first = AudioNode::bounded(
+        AudioNodeId::new(0),
+        AudioDirection::Sink,
+        &long_name,
+        "Synthetic audio device",
+        AudioVolume::from_linear_millis(9_999),
+        false,
+        true,
+    );
+    first.capabilities = AudioCapabilities {
+        can_set_volume: true,
+        can_set_mute: true,
+    };
+    let mut nodes = vec![first];
+    nodes.extend(
+        (1..=(MAX_AUDIO_NODES as u32 + 6))
+            .map(|id| synthetic_audio_node(id, AudioDirection::Sink, 500, false)),
+    );
+
+    assert_eq!(state.audio.availability, AdapterAvailability::Starting);
+    assert_eq!(
+        state.apply_audio_update(AudioUpdate::Snapshot {
+            nodes,
+            default_sink: Some(AudioNodeId::new(0)),
+            default_source: Some(AudioNodeId::new(u32::MAX)),
+            observed_millis: 1,
+        }),
+        vec![output]
+    );
+    assert_eq!(state.audio.availability, AdapterAvailability::Ready);
+    assert_eq!(state.audio.len(), MAX_AUDIO_NODES);
+    let sink = state.audio.default_sink().expect("resolved default sink");
+    assert_eq!(sink.volume.linear_millis(), 4_000);
+    assert!(sink.name.as_str().chars().count() <= MAX_AUDIO_NAME_CHARACTERS);
+    assert!(!sink.name.as_str().contains('\u{200b}'));
+    assert!(state.audio.default_source().is_none());
+
+    let replacement = synthetic_audio_node(0, AudioDirection::Sink, 750, true);
+    assert_eq!(
+        state.apply_audio_update(AudioUpdate::NodeChanged {
+            node: replacement,
+            observed_millis: 2,
+        }),
+        vec![output]
+    );
+    let updated = state.audio.default_sink().expect("delta after snapshot");
+    assert_eq!(updated.volume.linear_millis(), 750);
+    assert!(updated.muted);
+}
+
+#[test]
+fn audio_retains_stale_state_across_loss_and_recovers_on_a_fresh_snapshot() {
+    let (mut state, output) = state_with_output(67);
+    let initial = synthetic_audio_node(8, AudioDirection::Sink, 500, false);
+    state.apply_audio_update(AudioUpdate::Snapshot {
+        nodes: vec![initial],
+        default_sink: Some(AudioNodeId::new(8)),
+        default_source: None,
+        observed_millis: 1,
+    });
+    assert_eq!(state.audio.availability, AdapterAvailability::Ready);
+
+    assert!(state.apply_audio_update(AudioUpdate::Connecting).is_empty());
+    assert_eq!(state.audio.availability, AdapterAvailability::Stale);
+    assert_eq!(
+        state.apply_audio_update(AudioUpdate::Unavailable),
+        vec![output]
+    );
+    assert_eq!(state.audio.availability, AdapterAvailability::Stale);
+    assert_eq!(
+        state.audio.default_sink().map(|node| node.id),
+        Some(AudioNodeId::new(8))
+    );
+
+    let recovered = synthetic_audio_node(9, AudioDirection::Sink, 900, false);
+    state.apply_audio_update(AudioUpdate::Snapshot {
+        nodes: vec![recovered],
+        default_sink: Some(AudioNodeId::new(9)),
+        default_source: None,
+        observed_millis: 2,
+    });
+    assert_eq!(state.audio.availability, AdapterAvailability::Ready);
+    assert_eq!(
+        state.audio.default_sink().map(|node| node.id),
+        Some(AudioNodeId::new(9))
+    );
+}
+
+#[test]
+fn audio_commands_are_capability_gated_and_unsupported_route_actions_are_visible() {
+    let (mut state, output) = state_with_output(68);
+    let mut sink = synthetic_audio_node(10, AudioDirection::Sink, 500, false);
+    sink.capabilities = AudioCapabilities::default();
+    let source = synthetic_audio_node(11, AudioDirection::Source, 500, false);
+    state.apply_audio_update(AudioUpdate::Snapshot {
+        nodes: vec![sink, source],
+        default_sink: None,
+        default_source: None,
+        observed_millis: 1,
+    });
+
+    let (command, changed) = state.audio_command(
+        AudioCommandKind::SetVolume {
+            id: AudioNodeId::new(10),
+            volume: AudioVolume::from_linear_millis(650),
+        },
+        2,
+    );
+    assert!(command.is_none());
+    assert_eq!(changed, vec![output]);
+
+    let (route, changed) = state.audio_command(
+        AudioCommandKind::MoveStream {
+            stream: AudioNodeId::new(11),
+            target: AudioNodeId::new(10),
+        },
+        300,
+    );
+    assert!(route.is_none());
+    assert_eq!(changed, vec![output]);
+    let view = state
+        .output_view(output)
+        .expect("unsupported route feedback");
+    assert_eq!(view.activity.len(), 1);
+    assert_eq!(
+        view.activity[0].accessible_label,
+        "Audio: control unsupported"
+    );
+}
+
+#[cfg(feature = "audio-transport")]
+#[tokio::test]
+async fn audio_command_sender_stays_open_while_a_supervisor_retains_it() {
+    use tokio::time::{Duration, timeout};
+    use weftwise::services::audio::{COMMAND_CAPACITY, command_channel};
+
+    let (sender, mut receiver) = command_channel();
+    let retained = sender.clone();
+    drop(sender);
+    retained
+        .send(weftwise::services::audio::AudioCommand {
+            kind: AudioCommandKind::SetMute {
+                id: AudioNodeId::new(12),
+                muted: true,
+            },
+        })
+        .await
+        .expect("retained sender accepts command");
+    assert_eq!(COMMAND_CAPACITY, 16);
+    assert!(receiver.recv().await.is_some());
+    assert!(
+        timeout(Duration::from_millis(1), receiver.recv())
+            .await
+            .is_err()
+    );
+    drop(retained);
+    assert!(receiver.recv().await.is_none());
 }

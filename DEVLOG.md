@@ -6,6 +6,36 @@ or unmeasured. Planned work is never presented as implemented behavior.
 
 ---
 
+## 2026-08-30 - Strengthen Phase 5 audio recovery contracts
+
+The Phase 5 integration contract suite now exercises the audio domain alongside
+privacy and temporary feedback. Synthetic snapshots verify node-count, name,
+volume, and default-identity bounds before later deltas are accepted. Transport
+loss retains previously observed state as stale, and a fresh snapshot restores
+ready state with the new topology. Command tests verify capability rejection and
+visible content-free feedback for unsupported stream routing. Under the optional
+`audio-transport` feature, a retained command sender keeps the bounded receiver
+open until adapter ownership ends.
+
+### Verification
+
+- The default Phase 5 contract target passes 8 tests.
+- The `audio-transport` Phase 5 contract target passes 9 tests, including the
+  retained-command-channel regression.
+- The complete host gate passes formatting, deny-warning Clippy, 107 default
+  tests, documentation, file-size and dependency-topology checks,
+  public-safety automation, and RustSec over 172 locked dependencies. The
+  feature gate passes deny-warning Clippy, 109 tests, and documentation.
+- The same complete default and feature gates pass with exact Rust 1.96.0 in
+  the digest-pinned Arch environment against PipeWire 1.6.8, `libspa-0.2`, GTK
+  4.22.4, and gtk4-layer-shell 1.3.0.
+- Live PipeWire recovery, device hotplug, route removal, and hardware behavior
+  remain unmeasured and are not satisfied by these synthetic contracts.
+
+### Next
+
+- Validate the remaining recovery and hardware cases in a native user session.
+
 ## 2026-08-30 - Add the direct PipeWire audio adapter and typed audio control
 
 A transport-independent audio domain now models bounded sink and source nodes
