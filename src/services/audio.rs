@@ -657,6 +657,9 @@ mod transport {
         default_metadata_value, parse_props_pod, should_bind_default_metadata,
         should_clear_default_metadata,
     };
+    use crate::services::capture::{
+        CaptureKind, CaptureObservation, CaptureTracker, PublishCapture, capture_loss_state,
+    };
     use crate::supervisor::{Cancellation, ReconnectBackoff};
 
     /// The bound `default` metadata proxy retained for route mutation.
@@ -691,25 +694,51 @@ mod transport {
     /// Run the supervised PipeWire adapter, reconnecting until cancellation.
     pub async fn run(
         publish: impl Fn(AudioUpdate) + Send + Sync + 'static,
+        publish_capture: impl Fn(CaptureObservation) + Send + Sync + 'static,
         mut commands: mpsc::Receiver<AudioCommand>,
         mut cancellation: Cancellation,
     ) {
         let publish: Publish = Arc::new(publish);
+        let capture_publish: PublishCapture = Arc::new(publish_capture);
+        let capture_started = Instant::now();
+        // Capture observability is declared up front, like the other positive
+        // privacy adapters, so a pre-trust loss can surface as uncertainty.
+        for kind in CaptureKind::ALL {
+            (capture_publish)(CaptureObservation::supported(
+                kind,
+                true,
+                elapsed_millis(capture_started),
+            ));
+        }
         let mut backoff = ReconnectBackoff::default();
         loop {
             (publish)(AudioUpdate::Connecting);
+            // Attempt trust is reset every reconnect. It becomes true only when
+            // the capture second barrier reports a trusted (complete) graph, so a
+            // failure before that barrier is published as `Unavailable`, never a
+            // false `Stale`.
+            let mut capture_trusted = false;
             let (control_tx, control_rx) = pipewire::channel::channel::<Control>();
             let (done_tx, mut done_rx) = mpsc::unbounded_channel::<()>();
             let (ready_tx, mut ready_rx) = mpsc::unbounded_channel::<()>();
+            let (capture_ready_tx, mut capture_ready_rx) = mpsc::unbounded_channel::<bool>();
             let thread_publish = Arc::clone(&publish);
+            let thread_capture = Arc::clone(&capture_publish);
             let handle = std::thread::Builder::new()
                 .name("weftwise-pipewire".to_owned())
                 .spawn(move || {
-                    thread_main(thread_publish, control_rx, ready_tx);
+                    thread_main(
+                        thread_publish,
+                        thread_capture,
+                        control_rx,
+                        ready_tx,
+                        capture_ready_tx,
+                    );
                     let _ = done_tx.send(());
                 });
             let Ok(handle) = handle else {
                 (publish)(AudioUpdate::Unavailable);
+                publish_capture_loss(&capture_publish, capture_trusted, capture_started);
                 let delay = backoff.next_delay();
                 tokio::select! {
                     _ = cancellation.cancelled() => return,
@@ -730,6 +759,13 @@ mod transport {
                         ready = true;
                         if initial_sync.is_some() {
                             backoff.reset();
+                        }
+                    }
+                    trusted = capture_ready_rx.recv() => {
+                        if let Some(trusted) = trusted {
+                            // Trust for this attempt is driven only by the capture
+                            // second barrier, not the audio first barrier.
+                            capture_trusted = trusted;
                         }
                     }
                     command = commands.recv() => {
@@ -753,11 +789,30 @@ mod transport {
                 return;
             }
             (publish)(AudioUpdate::Unavailable);
+            publish_capture_loss(&capture_publish, capture_trusted, capture_started);
             let delay = backoff.next_delay();
             tokio::select! {
                 _ = cancellation.cancelled() => return,
                 _ = tokio::time::sleep(delay) => {}
             }
+        }
+    }
+
+    /// Publish capture loss for every source without degrading other privacy
+    /// sources: `Stale` once the attempt reached a complete trusted snapshot,
+    /// `Unavailable` before. Never `Inactive`.
+    fn publish_capture_loss(
+        capture_publish: &PublishCapture,
+        capture_trusted: bool,
+        capture_started: Instant,
+    ) {
+        let state = capture_loss_state(capture_trusted);
+        for kind in CaptureKind::ALL {
+            (capture_publish)(CaptureObservation::observed(
+                kind,
+                state,
+                elapsed_millis(capture_started),
+            ));
         }
     }
 
@@ -778,8 +833,10 @@ mod transport {
 
     fn thread_main(
         publish: Publish,
+        capture_publish: PublishCapture,
         control_rx: pipewire::channel::Receiver<Control>,
         ready_tx: mpsc::UnboundedSender<()>,
+        capture_ready_tx: mpsc::UnboundedSender<bool>,
     ) {
         pipewire::init();
         let Ok(main_loop) = MainLoopRc::new(None) else {
@@ -800,6 +857,9 @@ mod transport {
         let synced = Rc::new(Cell::new(false));
         let default_metadata: DefaultMetadata = Rc::new(RefCell::new(None));
         let started = Instant::now();
+        // The capture tracker shares this loop's registry and clock and drives
+        // microphone and camera evidence off the same globals as audio nodes.
+        let capture = CaptureTracker::new(Arc::clone(&capture_publish), started);
 
         let quit_loop = main_loop.clone();
         let command_nodes = Rc::clone(&nodes);
@@ -824,10 +884,13 @@ mod transport {
         let global_synced = Rc::clone(&synced);
         let global_metadata = Rc::clone(&default_metadata);
         let global_publish = Arc::clone(&publish);
+        let global_capture = Rc::clone(&capture);
+        let global_capture_registry = registry.clone();
         let remove_nodes = Rc::clone(&nodes);
         let remove_synced = Rc::clone(&synced);
         let remove_publish = Arc::clone(&publish);
         let remove_metadata = Rc::clone(&default_metadata);
+        let remove_capture = Rc::clone(&capture);
         let _registry_listener = registry
             .add_listener_local()
             .global(move |global| {
@@ -841,6 +904,7 @@ mod transport {
                     started,
                     global,
                 );
+                CaptureTracker::observe_global(&global_capture, &global_capture_registry, global);
             })
             .global_remove(move |id| {
                 let current_id = remove_metadata
@@ -858,6 +922,7 @@ mod transport {
                         observed_millis: elapsed_millis(started),
                     });
                 }
+                CaptureTracker::observe_remove(&remove_capture, id);
             })
             .register();
 
@@ -868,16 +933,46 @@ mod transport {
         let sync_defaults = Rc::clone(&defaults);
         let sync_synced = Rc::clone(&synced);
         let sync_publish = Arc::clone(&publish);
+        let sync_capture = Rc::clone(&capture);
+        // The capture graph uses a second readiness barrier. The first sync
+        // establishes registry enumeration and drives the audio snapshot and
+        // audio ready signal, preserving audio snapshot ordering. Binding each
+        // capture node and link during enumeration requests its info; the second
+        // sync flushes those info replies, and only its completion trusts the
+        // capture graph so a Node/Link running/active reply cannot land after
+        // trust.
+        let capture_pending: Rc<Cell<Option<pipewire::spa::utils::result::AsyncSeq>>> =
+            Rc::new(Cell::new(None));
+        let sync_core = core.clone();
         let error_loop = main_loop.clone();
         let _core_listener = core
             .add_listener_local()
             .done(move |id, sequence| {
-                if id != pipewire::core::PW_ID_CORE || sequence != pending || sync_synced.get() {
+                if id != pipewire::core::PW_ID_CORE {
                     return;
                 }
-                sync_synced.set(true);
-                publish_snapshot(&sync_nodes, &sync_defaults, &sync_publish, started);
-                let _ = ready_tx.send(());
+                if !sync_synced.get() && sequence == pending {
+                    sync_synced.set(true);
+                    publish_snapshot(&sync_nodes, &sync_defaults, &sync_publish, started);
+                    let _ = ready_tx.send(());
+                    // Issue the second sync only after the audio snapshot; its
+                    // completion marks the capture graph ready. If the second
+                    // sync cannot be issued, the barrier fails: publish pre-trust
+                    // uncertainty and report untrusted so a loss stays Unavailable.
+                    match sync_core.sync(0) {
+                        Ok(second) => capture_pending.set(Some(second)),
+                        Err(_) => {
+                            let trusted = CaptureTracker::finish_barrier(&sync_capture, false);
+                            let _ = capture_ready_tx.send(trusted);
+                        }
+                    }
+                    return;
+                }
+                if capture_pending.get() == Some(sequence) {
+                    capture_pending.set(None);
+                    let trusted = CaptureTracker::finish_barrier(&sync_capture, true);
+                    let _ = capture_ready_tx.send(trusted);
+                }
             })
             .error(move |id, _sequence, _result, _message| {
                 if id == pipewire::core::PW_ID_CORE {

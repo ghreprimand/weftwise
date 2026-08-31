@@ -122,10 +122,17 @@ impl SimpleComponent for AppModel {
         let audio_commands = {
             let (audio_commands, audio_receiver) = crate::services::audio::command_channel();
             let audio_sender = sender.input_sender().clone();
+            let capture_sender = sender.input_sender().clone();
             supervisor.spawn_cancellable_adapter(move |cancellation| async move {
                 crate::services::audio::run(
                     move |update| {
                         let _ = audio_sender.send(AppMessage::Audio(update));
+                    },
+                    move |observation| {
+                        let _ = capture_sender.send(AppMessage::Privacy {
+                            update: observation.update,
+                            observed_millis: observation.observed_millis,
+                        });
                     },
                     audio_receiver,
                     cancellation,

@@ -6,6 +6,90 @@ or unmeasured. Planned work is never presented as implemented behavior.
 
 ---
 
+## 2026-08-31 - Add positive PipeWire microphone and camera capture evidence
+
+A bounded capture-evidence graph now derives positive microphone and camera
+activity from the PipeWire object graph, riding the same supervisor-owned loop as
+the audio adapter. The graph is numeric-only: it retains device backing API, node
+capture role, node running flag, port direction, and link active flag as small
+closed enums keyed by registry identity. Client, application, and media names;
+node and device descriptions; object paths; serials; and process arguments are
+not retained. The few properties needed for classification are inspected
+transiently, and only their bounded classification result is kept.
+Classification is exact: sources match the exact `Audio/Source` or `Video/Source`
+class, terminals the exact `Stream/Input/Audio` or `Stream/Input/Video` class,
+and backing devices the exact `alsa`, `bluez5`, `v4l2`, or `libcamera`
+`device.api`, so decorated or near-match values are excluded.
+
+A source is reported active only by a complete, running, single-link direct path:
+an active link whose input port belongs to a running `Stream/Input/Audio` or
+`Stream/Input/Video` terminal and whose output port belongs to a running,
+non-virtual, non-monitor `Audio/Source` or `Video/Source` node backed by an ALSA
+or BlueZ5 device for microphones or a V4L2 or libcamera device for cameras. Only
+this direct hardware-source-to-terminal shape is proven; capture routed through
+intermediate filter nodes such as an echo-cancel or loopback chain is a
+deliberate known false negative that stays unknown rather than being asserted as
+active. The absence of a proven path over a complete graph is unknown rather than
+inactive, matching the project's positive-only privacy adapters.
+
+The running and active flags are preserved only across an identical
+re-announcement; a role, backing, or endpoint change resets the flag so a
+reclassified object cannot inherit a stale positive state. Exceeding a per-kind
+size bound marks the graph overflowed, which is sticky for the connection and is
+reported as a change so a previously trusted source does not silently persist as
+`Unknown`. Readiness and trust are modeled separately. Two core-sync barriers are
+used: the first establishes registry enumeration and drives the audio snapshot
+and audio ready signal, and the second flushes the node and link info replies
+that binding requested. The graph becomes ready when the second barrier completes
+and then republishes resolved states on every later change; it is trusted only
+when that barrier completed over a complete graph. A ready-but-incomplete graph
+still proves an active path as `Active` while reporting an absent source as
+`Unavailable`, and a later disappearance of that path becomes `Unavailable`
+immediately; a trusted graph reports an absent path as `Unknown` and degrades it
+to `Stale` on a later overflow. If the second sync cannot be issued, the barrier
+fails: the graph is neither ready nor trusted and every source is published as
+pre-trust `Unavailable`. Attempt trust is derived only from the capture second
+barrier (not the audio first barrier) and is reset on every reconnect, so a loss
+before a trusted barrier stays `Unavailable` and a loss after it becomes `Stale`.
+A proxy is bound and retained only for an identity the bounded graph kept, so the
+proxy maps stay within the graph's object bounds, and proxy info listeners hold
+only weak references back to the tracker so the retained node and link proxies
+cannot leak the graph across reconnects.
+
+### Verification
+
+- Thirty deterministic synthetic unit tests cover exact device-API, node-role,
+  and port-direction classification including rejection of decorated and
+  near-match values, complete and incomplete capture paths, the running
+  requirement on both endpoints, virtual and monitor exclusion, missing device
+  backing, reversed ports, cross-source isolation, self-looping links, link
+  removal, per-kind size bounds with non-retention of rejected identities, sticky
+  overflow across removal, the pre-announcement running guard, identical
+  re-announcement preservation, running-flag reset on reclassification, active-flag
+  reset on link re-route, the overflow-and-trust reporting decision, the
+  ready-versus-trusted second-barrier outcome, the overflow rising-edge change
+  signal, the connection-loss state decision, an active path proven over an
+  incomplete graph, and the observation builders. The pure graph builds and is
+  tested without the `audio-transport` feature.
+- The complete default worktree gate passes formatting, deny-warning Clippy,
+  89 library tests with one explicitly ignored live-logind test, all 58
+  integration tests, documentation, file-size and dependency-topology checks,
+  the RustSec audit over 172 locked dependencies, and the public-safety scan.
+- The `audio-transport` feature gate passes deny-warning Clippy, 90 library
+  tests with the same explicitly ignored live-logind test, all 59 integration
+  tests, and documentation, exercising the PipeWire node, link, port, device,
+  registry, and double-sync binding usage at compile time.
+- Both configurations pass in the digest-pinned Arch Linux container with
+  `rustc 1.96.0`, `cargo 1.96.0`, GTK 4.22.4, gtk4-layer-shell 1.3.0,
+  PipeWire 1.6.8, and SPA 0.2 metadata.
+- The live capture-graph behavior against a running PipeWire server, including
+  whether node and link info reach the running and active states as modeled and
+  whether the two-barrier readiness orders correctly against real info replies,
+  is unmeasured here; no PipeWire session is available in this environment and it
+  remains a native proof task.
+
+---
+
 ## 2026-08-30 - Add WirePlumber-cooperating default-route selection
 
 The direct PipeWire adapter now implements capability-gated default-route

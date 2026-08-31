@@ -90,6 +90,53 @@ distinguished from capture by these transports and remain unsupported as
 separate detections. Any incomplete, ambiguous, disconnected, or gap-affected
 source remains unknown, unavailable, or stale rather than becoming inactive.
 
+Microphone and camera evidence is derived by a bounded capture graph that rides
+the same supervisor-owned PipeWire loop as the audio adapter. The graph retains
+only numeric registry identities and small closed enums: a device's backing API,
+a node's capture role, a node's running flag, a port's direction, and a link's
+active flag. Classification is exact, not substring based: a source is the exact
+`media.class` `Audio/Source` or `Video/Source`, a terminal is the exact
+`Stream/Input/Audio` or `Stream/Input/Video`, and a backing device is the exact
+`device.api` `alsa`, `bluez5`, `v4l2`, or `libcamera`, so decorated or near-match
+values such as `Audio/Source/Virtual` or `alsa-evil` are excluded. Client,
+application, and media names; node and device descriptions; object paths;
+serials; and process arguments are not retained. The few properties needed for
+classification are inspected transiently, and only their bounded classification
+result is kept.
+
+A source is proven active only by a complete, running, single-link direct path:
+an active link whose input port belongs to a running `Stream/Input/Audio` or
+`Stream/Input/Video` terminal and whose output port belongs to a running,
+non-virtual, non-monitor `Audio/Source` or `Video/Source` node backed by an ALSA
+or BlueZ5 device for microphones or a V4L2 or libcamera device for cameras. Only
+this direct hardware-source-to-terminal shape is proven; capture routed through
+intermediate filter nodes such as an echo-cancel or loopback chain that inserts a
+virtual source is a deliberate known false negative and stays unknown rather than
+being asserted as active. The absence of a proven path over a complete graph is
+reported as unknown rather than inactive, because the graph cannot prove a client
+is not capturing through a path it does not model.
+
+The graph is size-bounded per object kind and preserves a node's running flag or
+a link's active flag only across an identical re-announcement; a role, backing,
+or endpoint change resets that flag so a reclassified object cannot inherit a
+stale positive state. Exceeding a bound marks the graph overflowed, which is
+sticky for the connection and reported as a change so a previously trusted source
+does not silently persist. Readiness and trust are modeled separately. Readiness
+uses two core-sync barriers: the first establishes registry enumeration and
+drives the audio snapshot, and the second flushes the node and link info replies
+that binding requested. A graph is ready once the second barrier completes, and a
+ready graph republishes resolved states on every later change; it is trusted only
+when that barrier completed over a complete, non-overflowed graph. A ready but
+incomplete graph still proves an active path as active while reporting an absent
+source as unavailable, and a later disappearance of that path becomes unavailable
+immediately. A trusted graph reports an absent path as unknown and degrades it to
+stale if a later overflow makes the graph incomplete. If the second barrier
+cannot be established, the graph is neither ready nor trusted and every source is
+published as pre-trust unavailable. Attempt trust is reset on every reconnect;
+a connection lost before the second barrier makes microphone and camera
+unavailable, and a loss after a trusted barrier makes them stale, without
+degrading the other privacy sources.
+
 The Hyprland adapter consumes address-free `screencastv2` lifecycle events and
 counts concurrent screencopy clients with bounded state. It validates the
 monitor, window, or region owner category but discards the shared target name.
