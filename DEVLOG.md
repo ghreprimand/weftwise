@@ -82,6 +82,7 @@ cannot leak the graph across reconnects.
 - Both configurations pass in the digest-pinned Arch Linux container with
   `rustc 1.96.0`, `cargo 1.96.0`, GTK 4.22.4, gtk4-layer-shell 1.3.0,
   PipeWire 1.6.8, and SPA 0.2 metadata.
+- GitHub Actions run 33362131874 passed commit `34c6e26`.
 - The live capture-graph behavior against a running PipeWire server, including
   whether node and link info reach the running and active states as modeled and
   whether the two-barrier readiness orders correctly against real info replies,
