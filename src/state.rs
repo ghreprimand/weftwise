@@ -12,8 +12,10 @@ use crate::context::arbitration::{
 };
 use crate::context::feedback::FeedbackEmitter;
 use crate::context::privacy::PrivacyDomain;
+use crate::services::activity::ActivityId;
 use crate::services::audio::AudioState;
 
+mod activity_integration;
 mod audio_integration;
 mod context_integration;
 mod media_integration;
@@ -910,6 +912,7 @@ pub struct AppState {
     hyprland_screencasts: u16,
     /// Root-owned PipeWire audio domain state.
     pub audio: AudioState,
+    activities: BTreeMap<ActivityId, activity_integration::ActivityRecord>,
     feedback: FeedbackEmitter,
     clock_label: String,
     arbitration: Arbitrator,

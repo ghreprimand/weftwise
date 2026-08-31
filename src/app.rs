@@ -18,7 +18,7 @@ use crate::message::{AppMessage, TimerKind};
 #[cfg(feature = "audio-transport")]
 use crate::services::audio::AudioCommand;
 use crate::services::mpris::{self, MediaCommand, MediaCommandKind};
-use crate::services::{clock, hyprland, logind};
+use crate::services::{activity, clock, hyprland, logind};
 use crate::shell::outputs::{OutputChanges, ShellEvent, SurfaceError, SurfaceManager};
 use crate::shell::{ProofOptionError, ProofOptions};
 use crate::state::{
@@ -52,6 +52,7 @@ pub enum StartupError {
 
 struct AppInit {
     state: AppState,
+    config_paths: ConfigPaths,
     options: ProofOptions,
     startup_failure: Rc<RefCell<Option<SurfaceError>>>,
 }
@@ -171,6 +172,25 @@ impl SimpleComponent for AppModel {
             )
             .await;
         });
+        let activity_sender = sender.input_sender().clone();
+        let activity_paths = init.config_paths.clone();
+        supervisor.spawn_cancellable_adapter(move |cancellation| async move {
+            match activity::transport::ActivityEndpoint::bind(&activity_paths).await {
+                Ok(endpoint) => {
+                    endpoint
+                        .run(
+                            move |observation| {
+                                let _ = activity_sender.send(AppMessage::Activity(observation));
+                            },
+                            cancellation,
+                        )
+                        .await;
+                }
+                Err(error) => {
+                    tracing::warn!(reason = %error, "local activity endpoint unavailable");
+                }
+            }
+        });
 
         let animation_watch = AnimationPreferenceWatch::new(sender.input_sender().clone());
         let reduced_motion = init.options.reduced_motion
@@ -256,6 +276,10 @@ impl SimpleComponent for AppModel {
             }
             AppMessage::Audio(update) => {
                 let outputs = self.state.apply_audio_update(update);
+                self.render_outputs(outputs);
+            }
+            AppMessage::Activity(observation) => {
+                let outputs = self.state.apply_activity_observation(observation);
                 self.render_outputs(outputs);
             }
             AppMessage::Privacy {
@@ -599,6 +623,7 @@ pub fn run() -> Result<(), StartupError> {
     state.config = config;
     app.run::<AppModel>(AppInit {
         state,
+        config_paths,
         options,
         startup_failure: startup_failure.clone(),
     });

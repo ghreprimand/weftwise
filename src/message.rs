@@ -2,6 +2,7 @@
 
 use crate::action::AppAction;
 use crate::context::privacy::PrivacyUpdate;
+use crate::services::activity::ActivityObservation;
 use crate::services::audio::AudioUpdate;
 use crate::services::clock::ClockTick;
 use crate::services::mpris::MediaUpdate;
@@ -32,6 +33,8 @@ pub enum AppMessage {
     Media(MediaUpdate),
     /// Ordered state from the direct PipeWire audio adapter.
     Audio(AudioUpdate),
+    /// Validated local activity received from an authenticated peer.
+    Activity(ActivityObservation),
     /// Privacy evidence observed through a selected native adapter.
     Privacy {
         /// Typed evidence update without source metadata.

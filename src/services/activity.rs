@@ -4,6 +4,8 @@
 //! not create the endpoint or authenticate peers; it only defines and validates
 //! one newline-delimited JSON frame at a time.
 
+pub mod transport;
+
 use std::fmt;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -274,6 +276,15 @@ pub enum ActivityEvent {
     Complete(ActivityCompletion),
     /// Remove existing activity state without publishing a result.
     Cancel(ActivityId),
+}
+
+/// One validated event with adapter-relative monotonic observation time.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ActivityObservation {
+    /// Validated producer operation.
+    pub event: ActivityEvent,
+    /// Milliseconds since the endpoint began accepting clients.
+    pub observed_millis: u64,
 }
 
 impl ActivityEvent {

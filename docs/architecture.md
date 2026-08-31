@@ -233,12 +233,23 @@ complete, and cancel are the only operations; completion outcomes are typed as
 succeeded or failed. Unknown fields, operations, enum values, and schema
 versions are rejected with payload-free diagnostics.
 
-The reserved endpoint is `activity-v1.sock` beneath the application XDG runtime
-directory. This landing resolves that path but does not create a socket or
-accept a peer. Current-user authentication, restrictive directory and socket
-permissions, client/rate bounds, and adapter supervision remain the next
-transport boundary. The protocol deliberately has no executable, argument
-vector, shell command, environment, output text, or arbitrary metadata field.
+The supervised endpoint is `activity-v1.sock` beneath the application XDG
+runtime directory. It refuses a symlinked or group/world-accessible runtime
+base, requires that base to match the effective process user, verifies every
+peer through Linux socket credentials, and applies `0700` to the application
+directory and `0600` to the socket. At most eight clients are processed at
+once. Each client has a 30-second idle deadline and may submit 64 frames per
+one-second window. Existing regular files and live sockets are never replaced;
+an owned refused socket is removed as stale, with its device and inode checked
+again before unlinking. Endpoint cleanup also verifies the created socket's
+device and inode. The protocol deliberately has no executable, argument vector,
+shell command, environment, output text, or arbitrary metadata field.
+
+Validated activity is emitted as typed root messages. Root state retains at
+most 128 live identities and projects publish/update state through the activity
+arbitration source. Completion becomes bounded temporary success or warning
+feedback, while cancellation removes the source-scoped identity. The publishing
+CLI remains pending.
 
 ## Temporary feedback
 

@@ -8,7 +8,7 @@ Hyprland. Other distributions are unverified.
 Install the native build baseline through the system package manager:
 
 ```sh
-sudo pacman -S --needed base-devel rustup gtk4 gtk4-layer-shell pipewire
+sudo pacman -S --needed base-devel rustup gtk4 gtk4-layer-shell pipewire clang
 ```
 
 Confirm the required native interfaces before invoking Cargo:
@@ -21,7 +21,8 @@ pkg-config --modversion libpipewire-0.3
 
 The selected audio boundary links the upstream PipeWire Rust binding to
 `libpipewire-0.3`. Arch's `pipewire` package supplies that interface without a
-separate development package. WirePlumber remains the runtime policy owner;
+separate development package, while `clang` supplies `libclang` for the
+binding's generated native declarations. WirePlumber remains the runtime policy owner;
 Weftwise uses PipeWire metadata and graph APIs rather than linking a
 WirePlumber Rust binding or polling `wpctl`.
 
@@ -74,11 +75,14 @@ reveals on bounded entry; physical edges retain the configured dwell.
 `[theme]` supplies validated semantic colors, font family, font size, and corner
 radius. Restart Weftwise after editing; live reload has not landed.
 
-The local activity protocol reserves
-`${XDG_RUNTIME_DIR}/weftwise/activity-v1.sock`. No listener is implemented yet,
-so the path is not created during startup. Protocol frames are JSON lines capped
-at 16 KiB; transport permissions, peer authentication, connection bounds, and
-rate limits remain separate Phase 6 work.
+The local activity listener uses
+`${XDG_RUNTIME_DIR}/weftwise/activity-v1.sock`. It starts with the supervised
+adapters, requires a private current-user runtime base, applies `0700` to the
+application directory and `0600` to the socket, and authenticates Linux peer
+credentials. Protocol frames are JSON lines capped at 16 KiB; concurrent
+clients, per-client idle time, and per-client message rate are bounded. A safe
+owned refused socket is treated as stale, but a regular file, foreign socket,
+or live endpoint is never replaced. The CLI remains pending.
 
 `config/example.toml` contains synthetic values only. Test fixtures must also
 use invented identities, paths, desktop text, metadata, hosts, outputs, and

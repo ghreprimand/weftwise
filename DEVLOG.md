@@ -6,6 +6,34 @@ or unmeasured. Planned work is never presented as implemented behavior.
 
 ---
 
+## 2026-08-31 - Bind the authenticated local activity endpoint
+
+The Phase 6 protocol now has a supervised Unix listener beneath the application
+XDG runtime directory. Setup rejects symlinked, foreign-owner, or permissive
+runtime bases; applies `0700` to the application directory and `0600` to the
+socket; authenticates every Linux peer credential against the effective
+process user; and refuses to replace regular files or live endpoints. Only an
+owned connection-refused socket is removed as stale, with device and inode
+checked again before unlinking. Cleanup applies the same identity check.
+
+The transport processes at most eight clients concurrently. Each client has a
+30-second idle deadline, a 64-frame-per-second rate limit, and the existing
+16 KiB frame boundary. Unknown versions and malformed frames disconnect without
+emitting root state or including payloads in diagnostics. Validated events now
+flow through typed root messages: up to 128 live identities can publish and
+update activity candidates, completion produces bounded temporary feedback,
+and cancellation removes the source-scoped identity. The CLI remains pending.
+The Phase 5 stale-evidence recovery contract now also confirms that fresh
+inactive microphone and camera observations clear their uncertainty marks.
+
+Verified with the complete host gate and the digest-pinned Arch baseline under
+exact Rust 1.96.0: formatting, warnings-denied Clippy, default and
+`audio-transport` tests, documentation, RustSec across 172 dependencies,
+file-size and dependency-topology checks, and public-safety passed. The first
+optional-feature container attempt stopped before compiling Weftwise because
+`libclang` was unavailable; adding Arch's `clang` native build dependency made
+the exact feature gate pass and the maintained package list now records it.
+
 ## 2026-08-31 - Define the bounded activity protocol and recovery contracts
 
 Phase 6 now has a transport-independent version 1 JSON-lines schema for timer,

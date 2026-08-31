@@ -642,25 +642,24 @@ fn stale_privacy_evidence_remains_visible_across_service_loss_until_recovered() 
             .any(|mark| mark.accessible_label.ends_with("state stale"))
     );
 
-    state.apply_privacy_update(
-        PrivacyUpdate::Observed {
-            evidence: PrivacyEvidence::Microphone,
-            state: PrivacyState::Active,
-        },
-        4,
+    for evidence in [PrivacyEvidence::Microphone, PrivacyEvidence::Camera] {
+        state.apply_privacy_update(
+            PrivacyUpdate::Observed {
+                evidence,
+                state: PrivacyState::Inactive,
+            },
+            4,
+        );
+    }
+    let recovered = state.output_view(output).expect("recovered privacy view");
+    assert!(recovered.attention.is_empty());
+    assert_eq!(
+        state.privacy.state(PrivacyEvidence::Microphone),
+        PrivacyState::Inactive
     );
-    let recovered = state.output_view(output).expect("partially recovered view");
-    assert!(
-        recovered
-            .attention
-            .iter()
-            .any(|mark| mark.accessible_label == "Microphone active")
-    );
-    // The privacy-critical microphone preempts the camera uncertainty in the
-    // bounded view, but the latter remains stale in root state until refreshed.
     assert_eq!(
         state.privacy.state(PrivacyEvidence::Camera),
-        PrivacyState::Stale
+        PrivacyState::Inactive
     );
 }
 

@@ -322,7 +322,8 @@ components do not replace the domain, adapter, or surface ownership layers.
 ### Phase 6 - Activities, workflow mode, and system health
 
 - A versioned, 16 KiB JSON-lines local event schema for timers and tracked work
-  is defined; the authenticated runtime endpoint and CLI remain pending.
+  and its authenticated, permission-restricted, client- and rate-bounded runtime
+  endpoint are implemented; the CLI remains pending.
 - Explicit program-and-argument process supervision with cancellation and
   output bounds.
 - OdysseyOS workflow profile state behind an adapter boundary.

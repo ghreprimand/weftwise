@@ -4,10 +4,11 @@ use std::time::Duration;
 use weftwise::config::ConfigPaths;
 use weftwise::services::activity::{
     ACTIVITY_PROTOCOL_VERSION, ACTIVITY_SOCKET_FILE, ActivityEndpointError, ActivityEvent,
-    ActivityKind, ActivityOutcome, ActivityProtocolError, ActivityPublication, ActivityUpdate,
-    MAX_ACTIVITY_FRAME_BYTES, MAX_ACTIVITY_LABEL_CHARACTERS, decode_frame, encode_frame,
-    endpoint_path,
+    ActivityKind, ActivityObservation, ActivityOutcome, ActivityProtocolError, ActivityPublication,
+    ActivityUpdate, MAX_ACTIVITY_FRAME_BYTES, MAX_ACTIVITY_LABEL_CHARACTERS, decode_frame,
+    encode_frame, endpoint_path,
 };
+use weftwise::state::{AppState, OutputId};
 
 #[test]
 fn synthetic_publish_fixture_decodes_to_bounded_typed_state() {
@@ -176,5 +177,78 @@ fn endpoint_is_reserved_only_beneath_the_application_runtime_directory() {
     assert_eq!(
         endpoint_path(&paths),
         Err(ActivityEndpointError::NotAbsolute)
+    );
+}
+
+#[test]
+fn root_state_publishes_updates_completes_and_cancels_activity_candidates() {
+    let mut state = AppState::default();
+    let output = OutputId::new(90);
+    state.reconcile_outputs([output], [], true);
+
+    let publish = ActivityPublication::new(
+        "build.synthetic",
+        ActivityKind::Build,
+        "Build synthetic target",
+        Some("Synthetic build in progress"),
+        Some(2_000),
+        Some(Duration::from_secs(60)),
+    )
+    .expect("publication");
+    assert_eq!(
+        state.apply_activity_observation(ActivityObservation {
+            event: ActivityEvent::Publish(publish),
+            observed_millis: 10,
+        }),
+        vec![output]
+    );
+    let published = state.output_view(output).expect("published view");
+    assert_eq!(published.activity.len(), 1);
+    assert_eq!(published.activity[0].progress_basis_points, Some(2_000));
+    assert_eq!(
+        published.activity[0].accessible_label,
+        "Synthetic build in progress"
+    );
+
+    let update = ActivityUpdate::new(
+        "build.synthetic",
+        Some("Build nearly complete"),
+        None,
+        Some(9_000),
+        None,
+    )
+    .expect("update");
+    state.apply_activity_observation(ActivityObservation {
+        event: ActivityEvent::Update(update),
+        observed_millis: 20,
+    });
+    let updated = state.output_view(output).expect("updated view");
+    assert_eq!(updated.activity[0].progress_basis_points, Some(9_000));
+    assert_eq!(updated.ribbon_context_label, "Build nearly complete");
+
+    let completion = weftwise::services::activity::ActivityCompletion::new(
+        "build.synthetic",
+        ActivityOutcome::Succeeded,
+        None,
+    )
+    .expect("completion");
+    state.apply_activity_observation(ActivityObservation {
+        event: ActivityEvent::Complete(completion),
+        observed_millis: 30,
+    });
+    let completed = state.output_view(output).expect("completed view");
+    assert_eq!(completed.ribbon_context_label, "Build complete");
+    assert_eq!(completed.activity[0].progress_basis_points, None);
+
+    state.apply_activity_observation(ActivityObservation {
+        event: ActivityEvent::cancel("build.synthetic").expect("cancel"),
+        observed_millis: 40,
+    });
+    assert!(
+        state
+            .output_view(output)
+            .expect("cancelled view")
+            .activity
+            .is_empty()
     );
 }

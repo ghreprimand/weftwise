@@ -100,8 +100,11 @@ charcoal/coral treatment is intentionally neutral; copy
 The Phase 6 activity foundation defines a versioned, 16 KiB JSON-lines schema
 for publishing, updating, completing, and cancelling timers, builds, downloads,
 renders, and command-result display data. It reserves a socket name beneath the
-Weftwise XDG runtime directory but does not bind or accept clients yet. The
-schema contains no executable, argument-vector, or shell-command field.
+Weftwise XDG runtime directory. The supervised endpoint validates the private
+runtime owner and Linux peer credentials, uses `0700` directory and `0600`
+socket modes, and bounds concurrent clients, idle reads, message rate, and
+frames. The schema contains no executable, argument-vector, or shell-command
+field. The publishing CLI remains pending.
 
 The Phase 2 state slice connects to Hyprland's event socket before requesting
 bounded JSON snapshots through fresh request connections. It applies the
@@ -157,7 +160,7 @@ are accompanied by verification. Planned behavior is labeled as planned.
 ## Building the scaffold
 
 The documented native baseline is OdysseyOS/Arch with `base-devel`, `rustup`,
-`gtk4`, `gtk4-layer-shell`, and `pipewire`. The selected audio boundary uses
+`gtk4`, `gtk4-layer-shell`, `pipewire`, and `clang`. The selected audio boundary uses
 direct PipeWire registry and metadata APIs while the installed WirePlumber
 service remains the policy owner; Weftwise does not link a WirePlumber Rust
 binding. The PipeWire audio transport is compiled behind the optional
