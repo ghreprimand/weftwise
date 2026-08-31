@@ -17,7 +17,7 @@ use crate::message::{AppMessage, TimerKind};
 #[cfg(feature = "audio-transport")]
 use crate::services::audio::AudioCommand;
 use crate::services::mpris::{self, MediaCommand, MediaCommandKind};
-use crate::services::{clock, hyprland};
+use crate::services::{clock, hyprland, logind};
 use crate::shell::outputs::{OutputChanges, ShellEvent, SurfaceError, SurfaceManager};
 use crate::shell::{ProofOptionError, ProofOptions};
 use crate::state::{
@@ -134,6 +134,19 @@ impl SimpleComponent for AppModel {
             });
             audio_commands
         };
+        let privacy_sender = sender.input_sender().clone();
+        supervisor.spawn_cancellable_adapter(move |cancellation| async move {
+            logind::run(
+                move |observation| {
+                    let _ = privacy_sender.send(AppMessage::Privacy {
+                        update: observation.update,
+                        observed_millis: observation.observed_millis,
+                    });
+                },
+                cancellation,
+            )
+            .await;
+        });
         let clock_sender = sender.input_sender().clone();
         supervisor.spawn_cancellable_adapter(move |cancellation| async move {
             clock::run(
@@ -227,6 +240,13 @@ impl SimpleComponent for AppModel {
             }
             AppMessage::Audio(update) => {
                 let outputs = self.state.apply_audio_update(update);
+                self.render_outputs(outputs);
+            }
+            AppMessage::Privacy {
+                update,
+                observed_millis,
+            } => {
+                let outputs = self.state.apply_privacy_update(update, observed_millis);
                 self.render_outputs(outputs);
             }
             AppMessage::TimerElapsed {

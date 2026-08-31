@@ -306,6 +306,9 @@ components do not replace the domain, adapter, or surface ownership layers.
   metadata APIs while WirePlumber retains policy ownership.
 - Temporary volume and brightness OSDs.
 - Recording, screen-sharing, camera, and privacy indicators.
+- Positive idle-inhibitor evidence through bounded systemd-logind snapshots;
+  compositor-protocol absence remains unknown until complementary evidence is
+  implemented.
 - Timers and supervised process/build progress.
 - Notification summaries where useful.
 

@@ -116,6 +116,14 @@ capability. Commands are pinned to the advertised unique-owner generation so a
 delayed action cannot control a restarted player. Player and session-bus
 restarts are handled independently with bounded retry.
 
+The Phase 5 privacy slice includes a supervised systemd-logind adapter for
+idle-inhibitor evidence. It subscribes to service-owner and manager-property
+changes before its initial bounded `ListInhibitors` snapshot, discards
+descriptive and process fields, and sends only typed evidence to root state. A
+positive logind record is active; an empty logind snapshot remains unknown
+because compositor-protocol inhibitors are outside logind. Service loss is
+visible as unavailable and reconnects with bounded backoff.
+
 Claims in project documentation describe implemented behavior only when they
 are accompanied by verification. Planned behavior is labeled as planned.
 

@@ -1,6 +1,7 @@
 //! Typed messages applied by the authoritative root model.
 
 use crate::action::AppAction;
+use crate::context::privacy::PrivacyUpdate;
 use crate::services::audio::AudioUpdate;
 use crate::services::clock::ClockTick;
 use crate::services::mpris::MediaUpdate;
@@ -31,6 +32,13 @@ pub enum AppMessage {
     Media(MediaUpdate),
     /// Ordered state from the direct PipeWire audio adapter.
     Audio(AudioUpdate),
+    /// Privacy evidence observed through a selected native adapter.
+    Privacy {
+        /// Typed evidence update without source metadata.
+        update: PrivacyUpdate,
+        /// Adapter-relative observation time.
+        observed_millis: u64,
+    },
     /// A generation-checked interaction timer fired.
     TimerElapsed {
         /// Output that owns the timer.

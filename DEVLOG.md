@@ -6,6 +6,44 @@ or unmeasured. Planned work is never presented as implemented behavior.
 
 ---
 
+## 2026-08-30 - Add bounded logind idle-inhibitor evidence
+
+A supervised systemd-logind adapter now feeds typed idle-inhibitor evidence to
+the root privacy domain. It opens the system-bus connection inside the Relm4
+Tokio runtime, subscribes to login1 owner and manager-property changes before
+its initial `ListInhibitors` snapshot, and reconnects with bounded jittered
+backoff after service or bus loss. Each snapshot is count-bounded. The adapter
+discards inhibitor owner, reason, mode, user, and process fields without logging
+them.
+
+An exact `idle` target is positive active evidence. An empty logind snapshot is
+unknown rather than inactive because Hyprland's Wayland idle-inhibit protocol
+is outside logind. Oversized snapshots and transport failures are unavailable,
+so neither an incomplete source nor a failed source can become false inactive
+state.
+
+### Verification
+
+- Unit tests cover exact compound-target matching, substring rejection, empty
+  and unrelated snapshots remaining unknown, and oversized responses becoming
+  uncertain rather than false inactive.
+- The live, ignored logind contract was run explicitly against the active
+  system bus and passed without printing or retaining inhibitor details.
+- The complete host gate passes formatting, deny-warning Clippy, 110 default
+  tests with one explicit live-only ignore, documentation, file-size and
+  dependency-topology checks, public-safety automation, and RustSec over 172
+  locked dependencies. The feature gate passes deny-warning Clippy, 112 tests
+  with the same explicit ignore, and documentation.
+- The same complete default and feature gates pass with exact Rust 1.96.0 in
+  the digest-pinned Arch environment against PipeWire 1.6.8, `libspa-0.2`, GTK
+  4.22.4, and gtk4-layer-shell 1.3.0.
+- Hosted verification remains pending for this landing.
+
+### Next
+
+- Add complementary Hyprland idle-inhibit and positive PipeWire capture
+  evidence before claiming complete privacy-source coverage.
+
 ## 2026-08-30 - Strengthen Phase 5 audio recovery contracts
 
 The Phase 5 integration contract suite now exercises the audio domain alongside
@@ -29,6 +67,7 @@ open until adapter ownership ends.
 - The same complete default and feature gates pass with exact Rust 1.96.0 in
   the digest-pinned Arch environment against PipeWire 1.6.8, `libspa-0.2`, GTK
   4.22.4, and gtk4-layer-shell 1.3.0.
+- GitHub Actions run 33344298746 passed commit `6a21082`.
 - Live PipeWire recovery, device hotplug, route removal, and hardware behavior
   remain unmeasured and are not satisfied by these synthetic contracts.
 

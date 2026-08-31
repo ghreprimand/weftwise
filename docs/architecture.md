@@ -90,6 +90,15 @@ distinguished from capture by these transports and remain unsupported as
 separate detections. Any incomplete, ambiguous, disconnected, or gap-affected
 source remains unknown, unavailable, or stale rather than becoming inactive.
 
+The implemented logind adapter subscribes to login1 service-owner and manager
+property changes before taking a bounded `ListInhibitors` snapshot. It retains
+none of the returned owner, reason, mode, user, or process fields and publishes
+only whether an exact `idle` target is present. Positive evidence is active; an
+empty snapshot is unknown rather than inactive because logind cannot observe
+Hyprland's Wayland idle-inhibit protocol. Oversized responses and transport
+loss are unavailable, and service-owner changes force a fresh connection and
+snapshot with bounded reconnect backoff.
+
 ## Audio control
 
 The audio domain is transport-independent typed state: bounded sink and source
