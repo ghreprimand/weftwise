@@ -17,6 +17,7 @@ use crate::services::audio::AudioState;
 mod audio_integration;
 mod context_integration;
 mod media_integration;
+mod ribbon_projection;
 
 /// Delay before a pointer at the top edge reveals the Ribbon.
 pub const DWELL_DELAY: Duration = Duration::from_millis(240);
@@ -684,6 +685,12 @@ pub struct OutputView {
     pub attention: Vec<StatusMark>,
     /// Active context text, or the clock fallback.
     pub ribbon_label: String,
+    /// Output-local workspace label rendered at the Ribbon start.
+    pub ribbon_navigation_label: String,
+    /// Selected candidate or active-client context rendered in the center.
+    pub ribbon_context_label: String,
+    /// Boundary-aligned clock rendered at the Ribbon end.
+    pub ribbon_status_label: String,
     /// Complete accessible label for the Ribbon button.
     pub ribbon_accessible_label: String,
     /// Typed actions advertised by the selected candidate.
@@ -1079,6 +1086,8 @@ impl AppState {
             .map(|projection| projection.accessible_label.clone())
             .filter(|label| !label.is_empty())
             .unwrap_or_else(|| format!("Ribbon: {ribbon_label}"));
+        let (ribbon_navigation_label, ribbon_context_label, ribbon_status_label) =
+            self.ribbon_region_labels(compositor_output, focused, detailed_candidate);
         let (mut activity, mut attention) =
             candidate.map(candidate_status_marks).unwrap_or_default();
         activity.truncate(MAX_ACTIVITY_MARKS);
@@ -1090,6 +1099,9 @@ impl AppState {
             activity,
             attention,
             ribbon_label,
+            ribbon_navigation_label,
+            ribbon_context_label,
+            ribbon_status_label,
             ribbon_accessible_label,
             candidate_actions: detailed_candidate
                 .map(|projection| projection.actions.clone())
@@ -1662,9 +1674,13 @@ mod tests {
         let first = state.output_view(first_id).expect("first view");
         let second = state.output_view(second_id).expect("second view");
         assert_eq!(first.ribbon_label, "12:00");
+        assert!(first.ribbon_context_label.is_empty());
+        assert_eq!(first.ribbon_status_label, "12:00");
         assert!(first.candidate_actions.is_empty());
         assert_eq!(first.activity.len(), 1);
         assert_eq!(second.ribbon_label, "Build complete");
+        assert_eq!(second.ribbon_context_label, "Build complete");
+        assert_eq!(second.ribbon_status_label, "12:00");
         assert_eq!(
             second.candidate_actions,
             vec![CandidateAction::RevealDetails]

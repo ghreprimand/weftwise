@@ -9,6 +9,7 @@ use relm4::gtk::glib;
 use relm4::gtk::prelude::*;
 
 use crate::action::AppAction;
+use crate::config::ThemeConfig;
 use crate::context::arbitration::{CandidateAction, Severity};
 use crate::state::{
     MarkPattern, MarkShape, OutputId, OutputView, PresentationLevel, StatusMark, WorkspaceMark,
@@ -24,15 +25,41 @@ pub mod selvage;
 /// Fixed transparent layer-surface height in logical pixels.
 pub const SURFACE_HEIGHT: i32 = 30;
 
-/// Pointer-active collapsed Selvage height in logical pixels.
+/// Visual collapsed Selvage height in logical pixels.
 pub const SELVAGE_HEIGHT: i32 = 3;
 
 const RIBBON_TRANSITION_MILLIS: u32 = 160;
 
-/// Install the static semantic GTK stylesheet for native proof surfaces.
-pub(crate) fn install_style(display: &gdk::Display) {
+/// Install validated semantic theme tokens plus the retained GTK stylesheet.
+pub(crate) fn install_style(display: &gdk::Display, theme: &ThemeConfig) {
     let provider = gtk::CssProvider::new();
-    provider.load_from_data(include_str!("../../assets/style.css"));
+    let css = format!(
+        "@define-color weftwise_background {};\n\
+         @define-color weftwise_surface {};\n\
+         @define-color weftwise_text {};\n\
+         @define-color weftwise_muted {};\n\
+         @define-color weftwise_accent {};\n\
+         @define-color weftwise_border {};\n\
+         @define-color weftwise_warning {};\n\
+         @define-color weftwise_critical {};\n\
+         * {{ font-family: \"{}\"; }}\n\
+         button.weftwise-ribbon {{ font-size: {}pt; border-radius: {}px; }}\n\
+         popover.weftwise-panel > contents {{ border-radius: {}px; }}\n{}",
+        theme.background,
+        theme.surface,
+        theme.text,
+        theme.muted,
+        theme.accent,
+        theme.border,
+        theme.warning,
+        theme.critical,
+        theme.font_family,
+        theme.font_size,
+        theme.radius,
+        theme.radius,
+        include_str!("../../assets/style.css"),
+    );
+    provider.load_from_data(&css);
     gtk::style_context_add_provider_for_display(
         display,
         &provider,
@@ -45,7 +72,9 @@ pub(crate) struct TopEdgeWidgets {
     /// Root overlay assigned to the layer window.
     pub root: gtk::Overlay,
     revealer: gtk::Revealer,
-    ribbon_label: gtk::Label,
+    ribbon_navigation_label: gtk::Label,
+    ribbon_context_label: gtk::Label,
+    ribbon_status_label: gtk::Label,
     navigation_marks: gtk::Box,
     activity_marks: gtk::Box,
     attention_marks: gtk::Box,
@@ -74,13 +103,32 @@ impl TopEdgeWidgets {
             .build();
         ribbon_button.add_css_class("weftwise-ribbon");
 
-        let ribbon_label = gtk::Label::builder()
-            .label("--:--")
+        let ribbon_navigation_label = gtk::Label::builder()
+            .label("")
             .ellipsize(gtk::pango::EllipsizeMode::End)
-            .hexpand(true)
             .xalign(0.0)
             .build();
-        ribbon_button.set_child(Some(&ribbon_label));
+        ribbon_navigation_label.add_css_class("weftwise-ribbon-navigation");
+        let ribbon_context_label = gtk::Label::builder()
+            .label("")
+            .ellipsize(gtk::pango::EllipsizeMode::End)
+            .hexpand(true)
+            .xalign(0.5)
+            .build();
+        ribbon_context_label.add_css_class("weftwise-ribbon-context");
+        let ribbon_status_label = gtk::Label::builder()
+            .label("--:--")
+            .ellipsize(gtk::pango::EllipsizeMode::End)
+            .xalign(1.0)
+            .build();
+        ribbon_status_label.add_css_class("weftwise-ribbon-status");
+        let ribbon_regions = gtk::CenterBox::new();
+        ribbon_regions.set_start_widget(Some(&ribbon_navigation_label));
+        ribbon_regions.set_center_widget(Some(&ribbon_context_label));
+        ribbon_regions.set_end_widget(Some(&ribbon_status_label));
+        ribbon_regions.set_hexpand(true);
+        ribbon_regions.add_css_class("weftwise-ribbon-regions");
+        ribbon_button.set_child(Some(&ribbon_regions));
 
         let reveal_emit = emit.clone();
         ribbon_button.connect_clicked(move |_| reveal_emit(AppAction::OpenPanel(output)));
@@ -236,7 +284,9 @@ impl TopEdgeWidgets {
         Self {
             root,
             revealer,
-            ribbon_label,
+            ribbon_navigation_label,
+            ribbon_context_label,
+            ribbon_status_label,
             navigation_marks,
             activity_marks,
             attention_marks,
@@ -257,9 +307,19 @@ impl TopEdgeWidgets {
             });
         self.revealer
             .set_reveal_child(level != PresentationLevel::Selvage);
-        self.ribbon_label.set_label(&view.ribbon_label);
-        self.ribbon_label
-            .set_tooltip_text(Some(&view.ribbon_accessible_label));
+        self.ribbon_navigation_label
+            .set_label(&view.ribbon_navigation_label);
+        self.ribbon_context_label
+            .set_label(&view.ribbon_context_label);
+        self.ribbon_status_label
+            .set_label(&view.ribbon_status_label);
+        for label in [
+            &self.ribbon_navigation_label,
+            &self.ribbon_context_label,
+            &self.ribbon_status_label,
+        ] {
+            label.set_tooltip_text(Some(&view.ribbon_accessible_label));
+        }
         while let Some(child) = self.navigation_marks.first_child() {
             self.navigation_marks.remove(&child);
         }

@@ -10,11 +10,12 @@ use relm4::gtk::prelude::*;
 use thiserror::Error;
 
 use crate::action::AppAction;
+use crate::config::Config;
 use crate::shell::ExclusiveZone;
 use crate::state::{OutputId, OutputView, PresentationLevel};
 use crate::widgets;
 
-use super::surface::ManagedSurface;
+use super::surface::{ManagedSurface, OutputRectangle, activation_region};
 
 /// Shell lifecycle messages sent to the authoritative root model.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -77,6 +78,7 @@ pub struct SurfaceManager {
     surfaces: Vec<ManagedSurface>,
     next_id: u64,
     zone: ExclusiveZone,
+    config: Config,
     action_sink: Rc<dyn Fn(AppAction)>,
     shell_sink: Rc<dyn Fn(ShellEvent)>,
 }
@@ -86,6 +88,7 @@ impl SurfaceManager {
     pub fn new(
         application: &gtk::Application,
         zone: ExclusiveZone,
+        config: Config,
         action_sink: Rc<dyn Fn(AppAction)>,
         shell_sink: Rc<dyn Fn(ShellEvent)>,
     ) -> Result<Self, SurfaceError> {
@@ -97,7 +100,7 @@ impl SurfaceManager {
             return Err(SurfaceError::InputRegionsUnsupported);
         }
 
-        widgets::install_style(&display);
+        widgets::install_style(&display, &config.theme);
         let monitors = display.monitors();
         let changed_sink = shell_sink.clone();
         let monitor_handler = monitors.connect_items_changed(move |_, _, _, _| {
@@ -111,6 +114,7 @@ impl SurfaceManager {
             surfaces: Vec::new(),
             next_id: 1,
             zone,
+            config,
             action_sink,
             shell_sink,
         })
@@ -119,6 +123,10 @@ impl SurfaceManager {
     /// Reconcile the current GDK monitor snapshot into native surfaces.
     pub fn reconcile(&mut self) -> OutputChanges {
         let monitors = self.monitor_snapshot();
+        let rectangles = monitors
+            .iter()
+            .map(|monitor| OutputRectangle::from(monitor.geometry()))
+            .collect::<Vec<_>>();
         let mut changes = OutputChanges::default();
 
         self.surfaces.retain_mut(|surface| {
@@ -131,6 +139,15 @@ impl SurfaceManager {
             }
         });
 
+        for surface in &self.surfaces {
+            let target = OutputRectangle::from(surface.monitor.geometry());
+            surface.set_activation_region(activation_region(
+                target,
+                &rectangles,
+                &self.config.activation,
+            ));
+        }
+
         for monitor in monitors {
             if self
                 .surfaces
@@ -142,11 +159,13 @@ impl SurfaceManager {
 
             let id = OutputId::new(self.next_id);
             self.next_id = self.next_id.wrapping_add(1).max(1);
+            let target = OutputRectangle::from(monitor.geometry());
             let surface = ManagedSurface::new(
                 &self.application,
                 &monitor,
                 id,
                 self.zone,
+                activation_region(target, &rectangles, &self.config.activation),
                 self.action_sink.clone(),
                 self.shell_sink.clone(),
             );

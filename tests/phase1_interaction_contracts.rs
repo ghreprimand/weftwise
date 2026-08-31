@@ -1,9 +1,12 @@
-use weftwise::shell::{ExclusiveZone, surface::InputRegionGeometry};
+use weftwise::shell::{
+    ExclusiveZone,
+    surface::{ActivationRegion, InputRegionGeometry},
+};
 use weftwise::state::{
     AppState, DISMISS_DELAY, DWELL_DELAY, InteractionEffect, InteractionInput, InteractionToken,
     OutputId, OutputPresentation, PresentationLevel,
 };
-use weftwise::widgets::{SELVAGE_HEIGHT, SURFACE_HEIGHT};
+use weftwise::widgets::SURFACE_HEIGHT;
 
 fn scheduled_dwell(effects: Vec<InteractionEffect>) -> InteractionToken {
     match effects.as_slice() {
@@ -142,23 +145,34 @@ fn output_reconciliation_preserves_existing_presentations_and_removes_only_reque
 
 #[test]
 fn input_regions_are_fixed_to_visible_height_and_start_empty_before_layout() {
+    let activation = ActivationRegion {
+        x: 400,
+        width: 96,
+        height: 8,
+    };
     assert_eq!(
-        InputRegionGeometry::for_level(0, PresentationLevel::Selvage),
+        InputRegionGeometry::for_level(0, PresentationLevel::Selvage, activation),
         InputRegionGeometry {
+            x: 0,
+            y: 0,
             width: 0,
-            height: SELVAGE_HEIGHT,
+            height: 8,
         }
     );
     assert_eq!(
-        InputRegionGeometry::for_level(512, PresentationLevel::Ribbon),
+        InputRegionGeometry::for_level(512, PresentationLevel::Ribbon, activation),
         InputRegionGeometry {
+            x: 0,
+            y: 0,
             width: 512,
             height: SURFACE_HEIGHT,
         }
     );
     assert_eq!(
-        InputRegionGeometry::for_level(512, PresentationLevel::Panel),
+        InputRegionGeometry::for_level(512, PresentationLevel::Panel, activation),
         InputRegionGeometry {
+            x: 0,
+            y: 0,
             width: 512,
             height: SURFACE_HEIGHT,
         }

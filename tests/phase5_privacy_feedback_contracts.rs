@@ -337,6 +337,54 @@ fn audio_snapshot_is_bounded_and_establishes_state_before_following_deltas() {
 }
 
 #[test]
+fn initial_audio_snapshot_does_not_present_an_unknown_volume_as_zero() {
+    let (mut state, output) = state_with_output(69);
+    let mut placeholder = synthetic_audio_node(12, AudioDirection::Sink, 0, false);
+    placeholder.capabilities = AudioCapabilities::default();
+
+    state.apply_audio_update(AudioUpdate::Snapshot {
+        nodes: vec![placeholder.clone()],
+        default_sink: Some(placeholder.id),
+        default_source: None,
+        observed_millis: 1,
+    });
+    assert!(
+        state
+            .output_view(output)
+            .expect("placeholder view")
+            .activity
+            .is_empty()
+    );
+
+    let mut observed = placeholder;
+    observed.volume = AudioVolume::from_linear_millis(800);
+    observed.capabilities.can_set_volume = true;
+    state.apply_audio_update(AudioUpdate::NodeChanged {
+        node: observed.clone(),
+        observed_millis: 2,
+    });
+    assert!(
+        state
+            .output_view(output)
+            .expect("first observed view")
+            .activity
+            .is_empty()
+    );
+
+    observed.volume = AudioVolume::from_linear_millis(700);
+    state.apply_audio_update(AudioUpdate::NodeChanged {
+        node: observed,
+        observed_millis: 50,
+    });
+    let changed = state.output_view(output).expect("changed volume view");
+    assert_eq!(changed.activity.len(), 1);
+    assert_ne!(
+        changed.activity[0].accessible_label,
+        "Output volume 0 percent"
+    );
+}
+
+#[test]
 fn audio_retains_stale_state_across_loss_and_recovers_on_a_fresh_snapshot() {
     let (mut state, output) = state_with_output(67);
     let initial = synthetic_audio_node(8, AudioDirection::Sink, 500, false);

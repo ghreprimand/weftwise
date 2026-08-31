@@ -174,7 +174,11 @@ Use versioned TOML under `$XDG_CONFIG_HOME/weftwise/config.toml`, falling back t
 language. Stable typed configuration is preferable while the product model is
 still forming.
 
-GTK CSS should provide OdysseyOS's dark/gold visual identity. Keep semantic design tokens—backgrounds, surfaces, text, accent, warning, critical, radii, spacing, and motion durations—separate from widget selectors so themes can evolve cleanly.
+GTK CSS should provide a configurable OdysseyOS visual identity. The initial
+default uses charcoal surfaces and a restrained coral accent. Keep semantic
+design tokens—backgrounds, surfaces, text, accent, warning, critical, radii,
+spacing, and motion durations—separate from widget selectors so themes can
+evolve cleanly.
 
 ## Hyprland integration
 

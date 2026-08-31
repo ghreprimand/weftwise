@@ -58,10 +58,18 @@ base, with the standard `.config` home fallback. Cache and state directories use
 the XDG cache and state bases. Runtime endpoints require `XDG_RUNTIME_DIR` and
 have no shared temporary-directory fallback.
 
-Future directory and file writers must apply modes `0700` and `0600`. Unknown
-configuration keys and unsupported schema versions are errors. Diagnostic
-formatting redacts resolved paths, desktop text, content metadata, and process
-arguments by default.
+Future directory and file writers must apply modes `0700` and `0600`. The
+application currently performs a bounded startup read of this file; an absent
+file selects defaults. Unknown keys, unsupported schema versions, files larger
+than 64 KiB, unsafe CSS token strings, and out-of-range activation geometry are
+errors. Diagnostic formatting redacts resolved paths, desktop text, content
+metadata, and process arguments by default.
+
+`[activation]` selects `exposed-edge` or comparison-only `full-width` input and
+bounds the island width, height, margin, and alignment in GDK logical pixels.
+`[ribbon]` enables the workspace, selected context, and clock regions.
+`[theme]` supplies validated semantic colors, font family, font size, and corner
+radius. Restart Weftwise after editing; live reload has not landed.
 
 `config/example.toml` contains synthetic values only. Test fixtures must also
 use invented identities, paths, desktop text, metadata, hosts, outputs, and

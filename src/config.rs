@@ -1,6 +1,8 @@
 //! Versioned configuration and privacy-preserving path discovery.
 
 use std::env;
+use std::fs::File;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -16,6 +18,7 @@ pub const PRIVATE_DIRECTORY_MODE: u32 = 0o700;
 pub const PRIVATE_FILE_MODE: u32 = 0o600;
 
 const APP_DIRECTORY: &str = "weftwise";
+const MAX_CONFIG_BYTES: u64 = 64 * 1024;
 
 /// Phase 0 user configuration.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -25,6 +28,12 @@ pub struct Config {
     pub schema_version: u32,
     /// Override the desktop animation preference when present.
     pub reduced_motion: Option<bool>,
+    /// Pointer activation geometry for the collapsed surface.
+    pub activation: ActivationConfig,
+    /// Persistent Ribbon regions sourced from root state.
+    pub ribbon: RibbonConfig,
+    /// Validated semantic theme tokens.
+    pub theme: ThemeConfig,
 }
 
 impl Default for Config {
@@ -32,6 +41,129 @@ impl Default for Config {
         Self {
             schema_version: CONFIG_SCHEMA_VERSION,
             reduced_motion: None,
+            activation: ActivationConfig::default(),
+            ribbon: RibbonConfig::default(),
+            theme: ThemeConfig::default(),
+        }
+    }
+}
+
+/// Placement policy for the collapsed pointer activation region.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ActivationMode {
+    /// Use a bounded island within the widest top-edge segment not covered by another output.
+    #[default]
+    ExposedEdge,
+    /// Retain the original full-width top-edge trigger for comparison or rollback.
+    FullWidth,
+}
+
+/// Alignment of an activation island inside its selected exposed segment.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ActivationAnchor {
+    /// Place the island near the segment's left/start edge.
+    Start,
+    /// Center the island within the exposed segment.
+    Center,
+    /// Place the island near the segment's right/end edge.
+    #[default]
+    End,
+}
+
+/// Bounded collapsed pointer activation settings, in GDK logical pixels.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ActivationConfig {
+    /// Activation placement policy.
+    pub mode: ActivationMode,
+    /// Maximum activation island width.
+    pub width: u16,
+    /// Activation island height; the visual Selvage remains thinner.
+    pub height: u8,
+    /// Inset from the selected exposed segment boundary.
+    pub margin: u16,
+    /// Island alignment within the selected exposed segment.
+    pub anchor: ActivationAnchor,
+}
+
+impl Default for ActivationConfig {
+    fn default() -> Self {
+        Self {
+            mode: ActivationMode::ExposedEdge,
+            width: 96,
+            height: 8,
+            margin: 12,
+            anchor: ActivationAnchor::End,
+        }
+    }
+}
+
+/// Persistent Ribbon region visibility.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RibbonConfig {
+    /// Show the output-local active workspace at the start.
+    pub show_workspace: bool,
+    /// Show the selected candidate or active client context in the center.
+    pub show_context: bool,
+    /// Show the in-process clock at the end.
+    pub show_clock: bool,
+}
+
+impl Default for RibbonConfig {
+    fn default() -> Self {
+        Self {
+            show_workspace: true,
+            show_context: true,
+            show_clock: true,
+        }
+    }
+}
+
+/// Semantic GTK theme tokens accepted from versioned configuration.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ThemeConfig {
+    /// Main translucent Ribbon background.
+    pub background: String,
+    /// Panel and raised-control background.
+    pub surface: String,
+    /// Primary foreground text.
+    pub text: String,
+    /// Secondary foreground and inactive marks.
+    pub muted: String,
+    /// Selected-state accent.
+    pub accent: String,
+    /// Subtle outline color.
+    pub border: String,
+    /// Warning-state color.
+    pub warning: String,
+    /// Critical-state color.
+    pub critical: String,
+    /// Font family restricted to a safe CSS identifier subset.
+    pub font_family: String,
+    /// Ribbon font size in points.
+    pub font_size: u8,
+    /// Raised-surface corner radius in logical pixels.
+    pub radius: u8,
+}
+
+impl Default for ThemeConfig {
+    fn default() -> Self {
+        Self {
+            background: "#111012F2".to_owned(),
+            surface: "#191719FA".to_owned(),
+            text: "#DDD6D0".to_owned(),
+            muted: "#928985".to_owned(),
+            accent: "#E06B5F".to_owned(),
+            border: "#443735".to_owned(),
+            warning: "#D6A34A".to_owned(),
+            critical: "#EF5F5A".to_owned(),
+            font_family: "monospace".to_owned(),
+            font_size: 10,
+            radius: 7,
         }
     }
 }
@@ -43,10 +175,12 @@ impl Config {
             .parse::<toml::Table>()
             .map_err(|source| ConfigError::InvalidSyntax { source })?;
 
-        if let Some(key) = table
-            .keys()
-            .find(|key| !matches!(key.as_str(), "schema_version" | "reduced_motion"))
-        {
+        if let Some(key) = table.keys().find(|key| {
+            !matches!(
+                key.as_str(),
+                "schema_version" | "reduced_motion" | "activation" | "ribbon" | "theme"
+            )
+        }) {
             return Err(ConfigError::UnknownKey {
                 key: diagnostic_key(key),
             });
@@ -61,8 +195,86 @@ impl Config {
             });
         }
 
+        config.validate()?;
         Ok(config)
     }
+
+    /// Load the bounded XDG configuration file, or defaults when it is absent.
+    pub fn load(path: &Path) -> Result<Self, ConfigLoadError> {
+        let file = match File::open(path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Self::default()),
+            Err(source) => return Err(ConfigLoadError::Read { source }),
+        };
+        let mut bytes = Vec::new();
+        file.take(MAX_CONFIG_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|source| ConfigLoadError::Read { source })?;
+        if bytes.len() as u64 > MAX_CONFIG_BYTES {
+            return Err(ConfigLoadError::TooLarge);
+        }
+        let source = std::str::from_utf8(&bytes).map_err(|_| ConfigLoadError::Encoding)?;
+        Self::parse(source).map_err(ConfigLoadError::Parse)
+    }
+
+    fn validate(&self) -> Result<(), ConfigError> {
+        if !(32..=512).contains(&self.activation.width) {
+            return Err(ConfigError::InvalidSetting {
+                setting: "activation.width",
+            });
+        }
+        if !(3..=12).contains(&self.activation.height) {
+            return Err(ConfigError::InvalidSetting {
+                setting: "activation.height",
+            });
+        }
+        if self.activation.margin > 128 {
+            return Err(ConfigError::InvalidSetting {
+                setting: "activation.margin",
+            });
+        }
+        for (setting, color) in [
+            ("theme.background", self.theme.background.as_str()),
+            ("theme.surface", self.theme.surface.as_str()),
+            ("theme.text", self.theme.text.as_str()),
+            ("theme.muted", self.theme.muted.as_str()),
+            ("theme.accent", self.theme.accent.as_str()),
+            ("theme.border", self.theme.border.as_str()),
+            ("theme.warning", self.theme.warning.as_str()),
+            ("theme.critical", self.theme.critical.as_str()),
+        ] {
+            if !valid_hex_color(color) {
+                return Err(ConfigError::InvalidSetting { setting });
+            }
+        }
+        if self.theme.font_family.is_empty()
+            || self.theme.font_family.len() > 64
+            || !self.theme.font_family.chars().all(|character| {
+                character.is_ascii_alphanumeric() || matches!(character, ' ' | '-')
+            })
+        {
+            return Err(ConfigError::InvalidSetting {
+                setting: "theme.font_family",
+            });
+        }
+        if !(8..=24).contains(&self.theme.font_size) {
+            return Err(ConfigError::InvalidSetting {
+                setting: "theme.font_size",
+            });
+        }
+        if self.theme.radius > 24 {
+            return Err(ConfigError::InvalidSetting {
+                setting: "theme.radius",
+            });
+        }
+        Ok(())
+    }
+}
+
+fn valid_hex_color(value: &str) -> bool {
+    matches!(value.len(), 7 | 9)
+        && value.starts_with('#')
+        && value[1..].bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 fn diagnostic_key(key: &str) -> String {
@@ -263,12 +475,48 @@ pub enum ConfigError {
         /// Version found in the configuration.
         found: u32,
     },
+    /// A supported setting is outside its bounded safe range.
+    #[error("configuration setting `{setting}` is invalid")]
+    InvalidSetting {
+        /// Stable public setting name; never sourced from user input.
+        setting: &'static str,
+    },
 }
 
 impl std::fmt::Debug for ConfigError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_tuple("ConfigError")
+            .field(&self.to_string())
+            .finish()
+    }
+}
+
+/// Safe configuration loading failures that never include the resolved path.
+#[derive(Error)]
+pub enum ConfigLoadError {
+    /// The file exceeded the configured input bound.
+    #[error("configuration file exceeds 64 KiB")]
+    TooLarge,
+    /// The file could not be read.
+    #[error("configuration file could not be read")]
+    Read {
+        /// Underlying operating-system failure without the requested path.
+        #[source]
+        source: io::Error,
+    },
+    /// The file was not valid UTF-8.
+    #[error("configuration file is not valid UTF-8")]
+    Encoding,
+    /// The bounded TOML configuration was invalid.
+    #[error(transparent)]
+    Parse(#[from] ConfigError),
+}
+
+impl std::fmt::Debug for ConfigLoadError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_tuple("ConfigLoadError")
             .field(&self.to_string())
             .finish()
     }
@@ -352,6 +600,52 @@ mod tests {
     fn rejects_unknown_schema_versions() {
         let error = Config::parse("schema_version = 7").unwrap_err();
         assert!(matches!(error, ConfigError::UnsupportedSchema { found: 7 }));
+    }
+
+    #[test]
+    fn parses_bounded_activation_ribbon_and_theme_settings() {
+        let config = Config::parse(
+            r##"
+                [activation]
+                mode = "exposed-edge"
+                width = 128
+                height = 7
+                margin = 16
+                anchor = "end"
+
+                [ribbon]
+                show_workspace = true
+                show_context = false
+                show_clock = true
+
+                [theme]
+                accent = "#AABBCC"
+                font_family = "Synthetic Mono"
+                radius = 9
+            "##,
+        )
+        .expect("valid nested configuration");
+        assert_eq!(config.activation.width, 128);
+        assert_eq!(config.activation.height, 7);
+        assert!(!config.ribbon.show_context);
+        assert_eq!(config.theme.accent, "#AABBCC");
+        assert_eq!(config.theme.font_family, "Synthetic Mono");
+        assert_eq!(config.theme.radius, 9);
+    }
+
+    #[test]
+    fn rejects_css_injection_and_unbounded_activation_geometry() {
+        for source in [
+            "[theme]\naccent = \"red; } button { color: red\"",
+            "[theme]\nfont_family = \"mono\\\"; color: red\"",
+            "[activation]\nwidth = 4096",
+            "[activation]\nheight = 24",
+        ] {
+            assert!(matches!(
+                Config::parse(source).expect_err("unsafe setting"),
+                ConfigError::InvalidSetting { .. }
+            ));
+        }
     }
 
     #[test]

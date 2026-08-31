@@ -6,6 +6,56 @@ or unmeasured. Planned work is never presented as implemented behavior.
 
 ---
 
+## 2026-08-31 - Refine exposed-edge activation and the configurable Ribbon
+
+The collapsed pointer target is now independent from the 3-pixel visual
+Selvage. Each output selects the widest portion of its top edge that is not
+covered by an adjacent output above it, then places a bounded activation island
+inside that segment. The default island is 96 by 8 GDK logical pixels, aligned
+near the segment end with a 12-pixel inset. This makes a partially exposed edge
+usable in vertically stacked layouts and limits competition with application
+top-edge gestures. Full-width activation remains an explicit comparison and
+rollback mode. Initial and allocation-time input regions are clamped to the
+actual surface width, and output reconciliation recalculates retained and new
+surfaces after layout changes.
+
+The revealed Ribbon now has persistent workspace, selected-context, and clock
+regions instead of one undifferentiated label. Contextual candidates such as
+media, privacy, and temporary feedback still use the deterministic arbiter, but
+they no longer displace the persistent output-local workspace and
+boundary-aligned clock. The default visual treatment changes from a flat
+brown/gold strip to inset charcoal surfaces, restrained coral selection,
+subtle borders, rounded corners, and clearer type hierarchy.
+
+The existing versioned XDG configuration is now read at startup with a 64 KiB
+bound. Typed `[activation]`, `[ribbon]`, and `[theme]` tables control trigger
+geometry, persistent-region visibility, semantic colors, font family, font
+size, and radius. Colors accept only exact hex forms and the font family is
+restricted before the tokens enter generated GTK CSS. The synthetic example
+configuration and maintained architecture, interface, build, README, and
+scaffolding prose describe the implemented startup behavior. Configuration
+reload still requires an application restart; safe live reload remains later
+work.
+
+The native audio integration no longer turns an unobserved PipeWire placeholder
+into `Volume 0%`. Snapshots and the first real property observation establish a
+baseline without producing temporary feedback. Later changes emit feedback only
+when both the previous and current default node have an observed capability.
+
+Verified on the host with the default repository gate and the
+`audio-transport` feature gate. Formatting, warnings-denied Clippy, all tests,
+documentation, file-size and dependency-topology checks, RustSec across 172
+dependencies, and public-safety passed. The default build ran 104 library tests
+with 103 passed and one live-logind test ignored, plus all integration suites;
+the audio feature ran 105 library tests with 104 passed and the same one ignored,
+plus all integration suites. The same default and audio-feature gates passed in
+the digest-pinned Arch baseline with Rust 1.96.0; the feature gate included the
+native PipeWire and clang build requirements. A live four-output session
+confirmed one bounded activation island per surface and no GTK CSS parser
+errors. Final trigger comfort, application gesture coexistence, the revised
+appearance, fullscreen stacking, and focus restoration remain manual
+acceptance work.
+
 ## 2026-08-31 - Add WirePlumber-cooperating active-stream movement
 
 The audio adapter can now move the active playback stream to a chosen sink by

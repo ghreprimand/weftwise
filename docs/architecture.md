@@ -304,13 +304,14 @@ strings are accepted.
 A surface manager owns one top-anchored overlay-layer surface per GDK output.
 Monitor, layer, anchors, namespace, keyboard mode, and the candidate exclusive
 zone are set before presentation. The fixed 30-pixel visual allocation is tall
-enough for the Ribbon, but its collapsed GDK input region covers only the
-3-pixel Selvage. The region is first applied after realization and recomputed
-directly from the GDK surface layout callback's logical width and after scale
-notifications. The pre-layout region is deliberately empty; the first positive
-layout replaces it synchronously so root-message latency cannot leave a stale
-empty region. Pointer entry and exit are observed in capture phase on the
-fixed-height root widget.
+enough for the Ribbon. The 3-pixel visual Selvage is distinct from its collapsed
+GDK input region: a bounded island selected from the widest exposed top-edge
+segment across the current GDK output layout. The region is first applied after
+realization and recomputed directly from the GDK surface layout callback's
+logical width and after output or scale notifications. The pre-layout region is
+deliberately empty; the first positive layout replaces it synchronously so
+root-message latency cannot leave a stale empty region. Pointer entry and exit
+are observed in capture phase on the fixed-height root widget.
 
 The native proof defaults to `exclusive_zone = -1` and retains `0` as a manual
 comparison value. A native four-output Hyprland session with Waybar showed that
@@ -358,6 +359,12 @@ user paths, desktop text, content metadata, and process arguments.
 GTK CSS uses semantic tokens for backgrounds, surfaces, text, accent, warning,
 critical state, spacing, radii, and motion. User CSS cannot alter protocol or
 action-dispatch safety boundaries.
+
+The current startup loader accepts validated semantic theme tokens rather than
+arbitrary CSS. Hex colors, a restricted font-family string, font size, and
+radius are converted into application-priority GTK CSS. The same versioned
+configuration controls exposed-edge activation geometry and visibility of the
+workspace, context, and clock Ribbon regions. Live reload remains planned.
 
 ## Module boundaries
 

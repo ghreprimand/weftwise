@@ -17,7 +17,8 @@ impl AppState {
         let observed_millis = audio_update_observed_millis(&update);
         let now = self.advance_now(observed_millis);
         let previous_sink = self.audio.default_sink().cloned();
-        let previous_source_muted = self.audio.default_source().map(|node| node.muted);
+        let previous_source = self.audio.default_source().cloned();
+        let is_node_observation = matches!(update, AudioUpdate::NodeChanged { .. });
         let mut feedback_events: Vec<FeedbackEvent> = Vec::new();
 
         match update {
@@ -60,16 +61,24 @@ impl AppState {
             }
         }
 
-        if let Some(sink) = self.audio.default_sink() {
-            let changed = previous_sink.as_ref().is_none_or(|old| {
-                old.id != sink.id || old.volume != sink.volume || old.muted != sink.muted
-            });
+        if is_node_observation
+            && let (Some(old), Some(sink)) = (previous_sink.as_ref(), self.audio.default_sink())
+        {
+            let changed = old.id == sink.id
+                && old.capabilities.can_set_volume
+                && sink.capabilities.can_set_volume
+                && (old.volume != sink.volume || old.muted != sink.muted);
             if changed {
                 feedback_events.push(sink_volume_feedback(sink));
             }
         }
-        if let Some(source) = self.audio.default_source()
-            && previous_source_muted.is_none_or(|muted| muted != source.muted)
+        if is_node_observation
+            && let (Some(old), Some(source)) =
+                (previous_source.as_ref(), self.audio.default_source())
+            && old.id == source.id
+            && old.capabilities.can_set_mute
+            && source.capabilities.can_set_mute
+            && old.muted != source.muted
         {
             feedback_events.push(FeedbackEvent::new(
                 FeedbackKind::Microphone,

@@ -7,8 +7,9 @@ state determine which one is visible.
 
 ### Selvage
 
-The resting surface is a 2-3 pixel line anchored to the top edge. It accepts
-pointer input at the screen boundary and must not reserve application space.
+The resting surface is a 2-3 pixel line anchored to the top edge. Its bounded
+activation island accepts pointer input at an exposed screen boundary without
+reserving application space.
 The native proof uses layer-shell zone `-1`. A native comparison against `0`
 showed that both values preserved the existing work area, while only `-1`
 retained physical-edge placement beside Waybar. Value `0` remains available as
@@ -29,14 +30,20 @@ length, color, and pattern. Labels and numbers appear after reveal.
 
 ### Ribbon
 
-The line brightens when the pointer reaches the top edge. Holding there for the
-configured dwell time reveals a 26-30 pixel Ribbon. Moving into the Ribbon keeps
-it open; leaving starts the dismissal timer.
+The pointer trigger is separate from the visual line. By default it is a small,
+bounded island near the end of the widest top-edge segment not covered by an
+output above it. This avoids requiring pointer precision at an internal edge in
+a vertically stacked layout and limits conflicts with application-owned
+top-edge reveal gestures. Holding in the island for the configured dwell time
+reveals a 26-30 pixel Ribbon. Moving into the Ribbon keeps it open; leaving
+starts the dismissal timer. Full-width activation remains an explicit
+comparison and rollback mode.
 
-The Ribbon labels the selected context and exposes its actions. The implemented
-Hyprland projection shows the active workspace and bounded window title on the
-focused output, and uses a boundary-aligned local clock when compositor context
-is absent. A volume change selects audio temporarily. The implemented MPRIS
+The Ribbon has persistent workspace, context, and clock regions. The context
+region labels the selected candidate or active client and exposes its actions.
+The implemented Hyprland projection shows the active workspace and bounded
+window title on the focused output, and uses a boundary-aligned local clock when
+compositor context is absent. A volume change selects audio temporarily. The implemented MPRIS
 projection shows bounded title and artist text for the selected player, with
 Previous, Play/Pause, Next, and 10-second seek controls present only when the
 player advertises each capability.

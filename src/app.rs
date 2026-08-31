@@ -12,6 +12,7 @@ use thiserror::Error;
 
 use crate::APPLICATION_ID;
 use crate::action::AppAction;
+use crate::config::{Config, ConfigLoadError, ConfigPathError, ConfigPaths};
 use crate::context::arbitration::CandidateAction;
 use crate::message::{AppMessage, TimerKind};
 #[cfg(feature = "audio-transport")]
@@ -35,6 +36,12 @@ pub enum StartupError {
     /// A public-safe native-proof environment switch was invalid.
     #[error(transparent)]
     ProofOption(#[from] ProofOptionError),
+    /// XDG configuration locations could not be resolved safely.
+    #[error(transparent)]
+    ConfigPath(#[from] ConfigPathError),
+    /// The bounded versioned configuration could not be loaded.
+    #[error(transparent)]
+    Config(#[from] ConfigLoadError),
     /// GTK could not initialize the active display backend.
     #[error("GTK could not initialize the active display backend")]
     GtkInitialization,
@@ -167,6 +174,7 @@ impl SimpleComponent for AppModel {
 
         let animation_watch = AnimationPreferenceWatch::new(sender.input_sender().clone());
         let reduced_motion = init.options.reduced_motion
+            || init.state.config.reduced_motion.unwrap_or(false)
             || animation_watch
                 .as_ref()
                 .is_none_or(|watch| !watch.animations_enabled());
@@ -185,6 +193,7 @@ impl SimpleComponent for AppModel {
         let surfaces = match SurfaceManager::new(
             &application,
             init.options.exclusive_zone,
+            state.config.clone(),
             action_sink,
             shell_sink,
         ) {
@@ -420,6 +429,7 @@ impl AppModel {
 
     fn effective_reduced_motion(&self) -> bool {
         self.options.reduced_motion
+            || self.state.config.reduced_motion.unwrap_or(false)
             || self
                 .animation_watch
                 .as_ref()
@@ -566,6 +576,8 @@ impl Drop for AnimationPreferenceWatch {
 pub fn run() -> Result<(), StartupError> {
     configure_relm_runtime()?;
     let options = ProofOptions::from_environment()?;
+    let config_paths = ConfigPaths::discover()?;
+    let config = Config::load(&config_paths.config_file)?;
     init_diagnostics();
 
     let startup_failure = Rc::new(RefCell::new(None));
@@ -574,13 +586,16 @@ pub fn run() -> Result<(), StartupError> {
         .application_id(APPLICATION_ID)
         .build();
     let app = RelmApp::from_app(application).visible_on_activate(false);
+    let configured_reduced_motion = config.reduced_motion.unwrap_or(false);
     tracing::info!(
         exclusive_zone = options.exclusive_zone.value(),
-        reduced_motion = options.reduced_motion,
+        reduced_motion = options.reduced_motion || configured_reduced_motion,
         "starting native surface proof"
     );
+    let mut state = AppState::default();
+    state.config = config;
     app.run::<AppModel>(AppInit {
-        state: AppState::default(),
+        state,
         options,
         startup_failure: startup_failure.clone(),
     });

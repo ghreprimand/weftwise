@@ -1,10 +1,3 @@
-@define-color weftwise_background rgba(18, 16, 14, 0.96);
-@define-color weftwise_surface rgba(34, 29, 22, 0.98);
-@define-color weftwise_text #f4ead7;
-@define-color weftwise_accent #d5a84b;
-@define-color weftwise_warning #e6a34a;
-@define-color weftwise_critical #ef6a62;
-
 window.weftwise-surface,
 .weftwise-root {
   background: transparent;
@@ -12,7 +5,8 @@ window.weftwise-surface,
 
 .weftwise-selvage {
   min-height: 3px;
-  background: @weftwise_accent;
+  background: transparent;
+  border-top: 1px solid alpha(@weftwise_border, 0.72);
 }
 
 .weftwise-navigation-region,
@@ -25,7 +19,9 @@ window.weftwise-surface,
   min-width: 14px;
   min-height: 3px;
   font-size: 0.1px;
-  background: alpha(@weftwise_text, 0.42);
+  margin-top: 1px;
+  background: alpha(@weftwise_muted, 0.52);
+  border-radius: 2px;
 }
 
 .weftwise-workspace-mark.occupied {
@@ -35,13 +31,15 @@ window.weftwise-surface,
 .weftwise-workspace-mark.active {
   min-width: 22px;
   background: @weftwise_accent;
+  box-shadow: 0 0 5px alpha(@weftwise_accent, 0.44);
 }
 
 .weftwise-status-mark {
   min-width: 8px;
   min-height: 3px;
   font-size: 0.1px;
-  background: alpha(@weftwise_text, 0.72);
+  margin-top: 1px;
+  background: alpha(@weftwise_muted, 0.72);
 }
 
 .weftwise-status-mark.warning {
@@ -96,12 +94,40 @@ window.weftwise-surface,
 }
 
 button.weftwise-ribbon {
-  min-height: 30px;
-  padding: 0 16px;
-  border: 0;
-  border-radius: 0;
+  min-height: 26px;
+  margin: 2px 8px;
+  padding: 0 12px;
+  border: 1px solid @weftwise_border;
   color: @weftwise_text;
   background: @weftwise_background;
+  box-shadow:
+    inset 0 1px alpha(@weftwise_text, 0.035),
+    0 2px 8px alpha(black, 0.34);
+}
+
+button.weftwise-ribbon:hover {
+  border-color: alpha(@weftwise_accent, 0.68);
+  background: @weftwise_surface;
+}
+
+.weftwise-ribbon-regions {
+  min-width: 1px;
+}
+
+.weftwise-ribbon-navigation,
+.weftwise-ribbon-status {
+  min-width: 88px;
+  color: @weftwise_muted;
+}
+
+.weftwise-ribbon-navigation {
+  font-weight: 600;
+  color: @weftwise_accent;
+}
+
+.weftwise-ribbon-context {
+  padding: 0 18px;
+  color: @weftwise_text;
 }
 
 button.weftwise-ribbon:focus-visible {
@@ -112,6 +138,6 @@ button.weftwise-ribbon:focus-visible {
 popover.weftwise-panel > contents {
   color: @weftwise_text;
   background: @weftwise_surface;
-  border: 1px solid alpha(@weftwise_accent, 0.55);
-  border-radius: 10px;
+  border: 1px solid @weftwise_border;
+  box-shadow: 0 8px 24px alpha(black, 0.42);
 }

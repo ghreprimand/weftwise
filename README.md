@@ -73,7 +73,8 @@ locked gate on the supported Arch native-library baseline.
 The Phase 1 native proof code provides:
 
 1. one top-edge overlay surface per GDK output;
-2. fixed transparent geometry with a 3-pixel collapsed input region;
+2. fixed transparent geometry with a 3-pixel visual Selvage and a bounded
+   exposed-edge activation island;
 3. deterministic dwell reveal, delayed dismissal, and explicit Panel state;
 4. Ribbon animation with GTK and explicit reduced-motion handling;
 5. an attached keyboard-navigable Panel with Escape and outside-click
@@ -85,6 +86,12 @@ The proof uses `exclusive_zone = -1`. A public-safe native Hyprland comparison
 beside Waybar showed that `0` and `-1` preserved the existing work area, while
 only `-1` kept every surface at the physical top edge. Pointer pass-through,
 stacking, and focus restoration remain manual acceptance checks.
+
+At startup, the native surface reads the bounded versioned XDG configuration.
+It supports exposed-edge or full-width activation, three persistent Ribbon
+regions, and validated semantic color, typography, and radius tokens. The
+default charcoal/coral treatment is intentionally neutral; copy
+`config/example.toml` into the XDG configuration location to customize it.
 
 The Phase 2 state slice connects to Hyprland's event socket before requesting
 bounded JSON snapshots through fresh request connections. It applies the
