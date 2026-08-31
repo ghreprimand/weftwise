@@ -59,7 +59,8 @@ tests with the same live-logind test ignored, all integration tests including
 the 10 Phase 5 contracts, and documentation. The live relink against a running
 WirePlumber, whether streams reach the running state, and the `object.serial`
 and permission values a real server reports remain unmeasured in this headless
-environment; the bindings are validated at compile time only.
+environment; the bindings are validated at compile time only. GitHub Actions
+run 33403704666 passed commit `4dfd432`.
 
 ## 2026-08-31 - Add positive PipeWire microphone and camera capture evidence
 
