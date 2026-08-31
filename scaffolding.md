@@ -158,7 +158,8 @@ Each external integration should be isolated behind a trait or module and should
 
 - Prefer event subscriptions over polling.
 - Establish an initial snapshot before consuming events.
-- Reconnect with bounded backoff after a service or Hyprland restart.
+- Reconnect with bounded backoff after a service or within-session Hyprland
+  transport loss. A full compositor restart requires a fresh shell process.
 - Degrade independently so one broken service does not take down the shell.
 - Convert raw protocol data into internal typed messages.
 - Avoid leaking transport details into GTK components.
@@ -301,8 +302,10 @@ components do not replace the domain, adapter, or surface ownership layers.
   capability-gated controls are implemented over D-Bus.
 - Deterministic content arbitration is implemented.
 - Add click-to-open Panel behavior and a Hyprland keybinding entry point.
-- Hyprland, media-player, and session-bus restart recovery is implemented;
-  sanitized native-session restart evidence remains a manual check.
+- Within-session Hyprland transport recovery plus media-player and session-bus
+  restart recovery is implemented. A full compositor restart terminates the
+  GTK Wayland client, so sanitized native evidence uses a fresh Weftwise start
+  after an orderly session cycle.
 
 ### Phase 5 - System feedback
 
@@ -318,7 +321,8 @@ components do not replace the domain, adapter, or surface ownership layers.
 
 ### Phase 6 - Activities, workflow mode, and system health
 
-- A versioned, size-bounded local event protocol for timers and tracked work.
+- A versioned, 16 KiB JSON-lines local event schema for timers and tracked work
+  is defined; the authenticated runtime endpoint and CLI remain pending.
 - Explicit program-and-argument process supervision with cancellation and
   output bounds.
 - OdysseyOS workflow profile state behind an adapter boundary.

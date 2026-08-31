@@ -119,7 +119,7 @@ labels appear only on the active output unless configured otherwise.
 
 Output surfaces are created and removed through a surface manager. Initial work
 establishes this ownership model; later work hardens hotplug, output renaming,
-scale changes, and compositor restarts.
+scale changes, and fresh-process startup after compositor session cycles.
 
 ## Motion and accessibility
 

@@ -74,6 +74,12 @@ reveals on bounded entry; physical edges retain the configured dwell.
 `[theme]` supplies validated semantic colors, font family, font size, and corner
 radius. Restart Weftwise after editing; live reload has not landed.
 
+The local activity protocol reserves
+`${XDG_RUNTIME_DIR}/weftwise/activity-v1.sock`. No listener is implemented yet,
+so the path is not created during startup. Protocol frames are JSON lines capped
+at 16 KiB; transport permissions, peer authentication, connection bounds, and
+rate limits remain separate Phase 6 work.
+
 `config/example.toml` contains synthetic values only. Test fixtures must also
 use invented identities, paths, desktop text, metadata, hosts, outputs, and
 process arguments. The public-safety script supplements, but does not replace,
@@ -119,7 +125,10 @@ connections are fresh, strictly timed, and limited to 1 MiB each. Event lines
 are limited to 64 KiB, while the initial race buffer is limited to 512 known
 events and 256 KiB of source data. A parse or truncation gap triggers new path
 discovery and a full snapshot. Synthetic parser and reducer tests do not replace
-a sanitized compositor restart check in a native session.
+a sanitized native check of transport recovery. A full Hyprland restart changes
+`HYPRLAND_INSTANCE_SIGNATURE` and terminates the GTK Wayland connection; verify
+that case by starting a fresh Weftwise process after an orderly session cycle,
+not by expecting the old process to reconnect.
 
 ## Required gates
 

@@ -3,8 +3,9 @@ use weftwise::context::feedback::{FeedbackEvent, FeedbackKind};
 use weftwise::context::privacy::{PrivacyEvidence, PrivacyState, PrivacyUpdate};
 use weftwise::services::audio::{
     AudioCapabilities, AudioCommandKind, AudioDirection, AudioNode, AudioNodeId, AudioUpdate,
-    AudioVolume, MAX_AUDIO_NAME_CHARACTERS, MAX_AUDIO_NODES,
+    AudioVolume, Generation, MAX_AUDIO_NAME_CHARACTERS, MAX_AUDIO_NODES, MovableStreamState,
 };
+use weftwise::services::capture::{CaptureGraph, CaptureKind, DeviceApi, NodeRole, PortDirection};
 use weftwise::state::{
     AdapterAvailability, AppState, HyprlandEvent, HyprlandSnapshot, HyprlandUpdate, MarkPattern,
     MarkShape, OutputId,
@@ -461,6 +462,205 @@ fn audio_commands_are_capability_gated_and_unsupported_route_actions_are_visible
     assert_eq!(
         view.activity[0].accessible_label,
         "Audio: control unsupported"
+    );
+}
+
+#[test]
+fn audio_service_loss_hotplug_and_recovery_replace_stale_defaults() {
+    let (mut state, output) = state_with_output(70);
+    let first = synthetic_audio_node(20, AudioDirection::Sink, 500, false);
+    state.apply_audio_update(AudioUpdate::Snapshot {
+        nodes: vec![first],
+        default_sink: Some(AudioNodeId::new(20)),
+        default_source: None,
+        observed_millis: 1,
+    });
+
+    // Transport loss retains an explicitly stale projection rather than
+    // treating the old endpoint as live. A fresh graph can then replace it.
+    assert_eq!(
+        state.apply_audio_update(AudioUpdate::Unavailable),
+        vec![output]
+    );
+    assert_eq!(state.audio.availability, AdapterAvailability::Stale);
+
+    let hotplugged = synthetic_audio_node(21, AudioDirection::Sink, 650, false);
+    assert_eq!(
+        state.apply_audio_update(AudioUpdate::Snapshot {
+            nodes: vec![hotplugged],
+            default_sink: Some(AudioNodeId::new(21)),
+            default_source: None,
+            observed_millis: 2,
+        }),
+        vec![output]
+    );
+    assert_eq!(state.audio.availability, AdapterAvailability::Ready);
+    assert!(state.audio.node(AudioNodeId::new(20)).is_none());
+    assert_eq!(
+        state.audio.default_sink().map(|node| node.id),
+        Some(AudioNodeId::new(21))
+    );
+}
+
+#[test]
+fn route_removal_revokes_move_capability_before_a_new_route_is_offered() {
+    let (mut state, output) = state_with_output(71);
+    let sink = synthetic_audio_node(30, AudioDirection::Sink, 500, false);
+    state.apply_audio_update(AudioUpdate::Snapshot {
+        nodes: vec![sink],
+        default_sink: Some(AudioNodeId::new(30)),
+        default_source: None,
+        observed_millis: 1,
+    });
+    state.apply_audio_update(AudioUpdate::MovableStreamChanged {
+        state: MovableStreamState::Active {
+            stream: AudioNodeId::new(31),
+            generation: Generation::new(4),
+        },
+        observed_millis: 2,
+    });
+    assert!(
+        state
+            .audio_command(
+                AudioCommandKind::MoveStream {
+                    stream: AudioNodeId::new(31),
+                    target: AudioNodeId::new(30),
+                },
+                3,
+            )
+            .0
+            .is_some()
+    );
+
+    // The adapter removes the active stream selection before another request
+    // can be dispatched. The former route must not remain actionable.
+    state.apply_audio_update(AudioUpdate::MovableStreamChanged {
+        state: MovableStreamState::Unavailable,
+        observed_millis: 4,
+    });
+    let (command, changed) = state.audio_command(
+        AudioCommandKind::MoveStream {
+            stream: AudioNodeId::new(31),
+            target: AudioNodeId::new(30),
+        },
+        5,
+    );
+    assert!(command.is_none());
+    assert_eq!(changed, vec![output]);
+    assert_eq!(
+        state.output_view(output).unwrap().activity[0].accessible_label,
+        "Audio: control unsupported"
+    );
+}
+
+#[test]
+fn rapid_audio_volume_deltas_coalesce_to_the_latest_default_sink_state() {
+    let (mut state, output) = state_with_output(72);
+    let initial = synthetic_audio_node(40, AudioDirection::Sink, 400, false);
+    state.apply_audio_update(AudioUpdate::Snapshot {
+        nodes: vec![initial],
+        default_sink: Some(AudioNodeId::new(40)),
+        default_source: None,
+        observed_millis: 1,
+    });
+
+    for (at, volume) in [(2, 500), (3, 600), (4, 700)] {
+        state.apply_audio_update(AudioUpdate::NodeChanged {
+            node: synthetic_audio_node(40, AudioDirection::Sink, volume, false),
+            observed_millis: at,
+        });
+    }
+    assert_eq!(state.flush_feedback(45), vec![output]);
+    let view = state.output_view(output).expect("coalesced audio feedback");
+    assert_eq!(view.activity.len(), 1);
+    // PipeWire's cubic UI scale makes linear 700 map to 89 percent.
+    assert_eq!(
+        view.activity[0].accessible_label,
+        "Output volume 89 percent"
+    );
+    assert_eq!(view.activity[0].progress_basis_points, Some(8_900));
+}
+
+#[test]
+fn capture_graph_handles_out_of_order_events_and_removal_without_false_activity() {
+    let mut graph = CaptureGraph::new();
+    // State arriving before its object announcement is ignored, so an event
+    // race cannot surface a capture indicator before a complete path exists.
+    assert!(!graph.set_node_running(50, true));
+    assert!(!graph.set_link_active(53, true));
+    assert_eq!(graph.evaluate().microphone, PrivacyState::Unknown);
+
+    assert!(graph.upsert_port(51, 50, PortDirection::Output));
+    assert!(graph.upsert_port(54, 55, PortDirection::Input));
+    assert!(graph.upsert_link(53, 51, 54));
+    assert!(graph.upsert_device(49, DeviceApi::Alsa));
+    assert!(graph.upsert_node(50, NodeRole::AudioSource, Some(49)));
+    assert!(graph.upsert_node(55, NodeRole::AudioInputStream, None));
+    assert!(graph.set_node_running(50, true));
+    assert!(graph.set_node_running(55, true));
+    assert!(graph.set_link_active(53, true));
+    assert!(graph.path_active(CaptureKind::Microphone));
+
+    assert!(graph.remove(53));
+    assert!(!graph.path_active(CaptureKind::Microphone));
+    assert_eq!(graph.evaluate().microphone, PrivacyState::Unknown);
+}
+
+#[test]
+fn stale_privacy_evidence_remains_visible_across_service_loss_until_recovered() {
+    let (mut state, output) = state_with_output(73);
+    for evidence in [PrivacyEvidence::Microphone, PrivacyEvidence::Camera] {
+        state.apply_privacy_update(
+            PrivacyUpdate::Supported {
+                evidence,
+                supported: true,
+            },
+            1,
+        );
+        state.apply_privacy_update(
+            PrivacyUpdate::Observed {
+                evidence,
+                state: PrivacyState::Active,
+            },
+            2,
+        );
+    }
+    state.apply_privacy_update(PrivacyUpdate::Degraded, 3);
+    let stale = state.output_view(output).expect("stale privacy view");
+    assert_eq!(
+        state.privacy.state(PrivacyEvidence::Microphone),
+        PrivacyState::Stale
+    );
+    assert_eq!(
+        state.privacy.state(PrivacyEvidence::Camera),
+        PrivacyState::Stale
+    );
+    assert!(
+        stale
+            .attention
+            .iter()
+            .any(|mark| mark.accessible_label.ends_with("state stale"))
+    );
+
+    state.apply_privacy_update(
+        PrivacyUpdate::Observed {
+            evidence: PrivacyEvidence::Microphone,
+            state: PrivacyState::Active,
+        },
+        4,
+    );
+    let recovered = state.output_view(output).expect("partially recovered view");
+    assert!(
+        recovered
+            .attention
+            .iter()
+            .any(|mark| mark.accessible_label == "Microphone active")
+    );
+    // The privacy-critical microphone preempts the camera uncertainty in the
+    // bounded view, but the latter remains stale in root state until refreshed.
+    assert_eq!(
+        state.privacy.state(PrivacyEvidence::Camera),
+        PrivacyState::Stale
     );
 }
 

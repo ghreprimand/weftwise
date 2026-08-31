@@ -1,0 +1,1 @@
+{"operation":"publish","schema_version":1,"id":"build.synthetic","kind":"build","label":"Compile synthetic target","accessible_label":"Build in progress","progress_basis_points":3750,"expires_after_millis":60000}

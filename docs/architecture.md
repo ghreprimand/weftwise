@@ -141,8 +141,8 @@ The Hyprland adapter consumes address-free `screencastv2` lifecycle events and
 counts concurrent screencopy clients with bounded state. It validates the
 monitor, window, or region owner category but discards the shared target name.
 Only a positive count is active. Zero remains unknown because socket2 provides
-no initial screencast snapshot, and a parse gap, compositor restart, or socket
-loss changes the source to stale or unavailable before reconnect.
+no initial screencast snapshot, and a parse gap or socket loss changes the
+source to stale or unavailable before reconnect.
 
 The implemented logind adapter subscribes to login1 service-owner and manager
 property changes before taking a bounded `ListInhibitors` snapshot. It retains
@@ -222,6 +222,24 @@ running WirePlumber remains unmeasured here. The adapter and its optional
 The transport for this adapter lives in a dedicated `audio/transport.rs` module
 so the always-compiled pure model stays well under the file-size limits.
 
+## Local activity protocol
+
+Protocol version 1 is a transport-independent newline-delimited JSON schema for
+timer, build, download, render, and command-result display activity. Each frame
+is limited to 16 KiB before parsing. It carries a protocol-safe stable identity,
+sanitized bounded labels, optional progress in zero through 10,000 basis
+points, and an optional lifetime no longer than 24 hours. Publish, update,
+complete, and cancel are the only operations; completion outcomes are typed as
+succeeded or failed. Unknown fields, operations, enum values, and schema
+versions are rejected with payload-free diagnostics.
+
+The reserved endpoint is `activity-v1.sock` beneath the application XDG runtime
+directory. This landing resolves that path but does not create a socket or
+accept a peer. Current-user authentication, restrictive directory and socket
+permissions, client/rate bounds, and adapter supervision remain the next
+transport boundary. The protocol deliberately has no executable, argument
+vector, shell command, environment, output text, or arbitrary metadata field.
+
 ## Temporary feedback
 
 Temporary feedback confirms a discrete change: a volume or brightness step, a
@@ -270,6 +288,14 @@ and buffer overflow mark retained state stale and force fresh discovery plus a
 new snapshot. Paired legacy workspace, focused-output, move, and title events
 are ignored in favor of their stable-identity counterparts. Bounded exponential
 backoff includes jitter.
+
+That recovery boundary is limited to the current compositor session. Hyprland
+advertises a new instance signature after a full restart, while the existing
+process environment retains the former value, and GTK's Wayland connection is
+closed with the compositor. Weftwise therefore does not claim same-process
+recovery from a full compositor restart. Native acceptance for that lifecycle
+starts a fresh process after an orderly session cycle; synthetic transport
+tests can rotate safe instance directories without implying GTK survival.
 The clock is a separate supervised in-process adapter and aligns each update to
 the next wall-clock minute rather than spawning or periodically drifting.
 Synchronous application shutdown first broadcasts cooperative cancellation,
@@ -384,7 +410,7 @@ The initial source layout retains dedicated modules for:
 
 - application lifecycle, messages, state, actions, and configuration;
 - shell surfaces and output ownership;
-- Hyprland, MPRIS, clock, and process adapters;
+- Hyprland, MPRIS, clock, local-activity, and process adapters;
 - context candidates and arbitration; and
 - Selvage, Ribbon, Panel, active-context, media, and clock components.
 

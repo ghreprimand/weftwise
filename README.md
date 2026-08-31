@@ -97,10 +97,20 @@ instead of requiring an impossible physical-edge dwell. The default
 charcoal/coral treatment is intentionally neutral; copy
 `config/example.toml` into the XDG configuration location to customize it.
 
+The Phase 6 activity foundation defines a versioned, 16 KiB JSON-lines schema
+for publishing, updating, completing, and cancelling timers, builds, downloads,
+renders, and command-result display data. It reserves a socket name beneath the
+Weftwise XDG runtime directory but does not bind or accept clients yet. The
+schema contains no executable, argument-vector, or shell-command field.
+
 The Phase 2 state slice connects to Hyprland's event socket before requesting
 bounded JSON snapshots through fresh request connections. It applies the
 snapshot atomically, replays buffered address-bearing events in order, and
-re-resolves the instance after parse gaps, disconnects, or compositor restarts.
+re-resolves the current session's advertised instance after parse gaps or
+transport disconnects. A full compositor restart changes the instance
+signature and closes GTK's Wayland connection, so same-process recovery is not
+claimed; native acceptance instead covers a fresh Weftwise start after an
+orderly session cycle.
 Root state now owns typed outputs, workspaces, clients, active context, adapter
 availability, and GDK connector bindings. Each surface renders only its local
 workspace marks; the focused Ribbon renders active context with a

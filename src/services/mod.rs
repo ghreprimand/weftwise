@@ -1,5 +1,6 @@
 //! External transport adapters.
 
+pub mod activity;
 pub mod audio;
 pub mod capture;
 pub mod clock;

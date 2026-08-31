@@ -6,6 +6,43 @@ or unmeasured. Planned work is never presented as implemented behavior.
 
 ---
 
+## 2026-08-31 - Define the bounded activity protocol and recovery contracts
+
+Phase 6 now has a transport-independent version 1 JSON-lines schema for timer,
+build, download, render, and command-result display activity. Publish, update,
+complete, and cancel operations carry protocol-safe identities, sanitized
+bounded labels, optional basis-point progress, bounded lifetimes, and typed
+terminal outcomes. Frames larger than 16 KiB, unknown fields or versions,
+invalid identities, out-of-range progress, invalid lifetimes, and empty updates
+are rejected without payload-bearing diagnostics. A synthetic fixture and
+round-trip, rejection, redaction, and XDG endpoint-path contracts cover the
+boundary. The schema accepts no executable, arguments, or shell command.
+
+The versioned socket leaf is reserved below the Weftwise XDG runtime directory,
+but no endpoint is created yet. Authentication, restrictive permissions,
+connection/rate limits, supervision, and the CLI remain separate work.
+
+The Hyprland lifecycle contract was also corrected after native analysis. A
+full compositor restart changes its instance signature and closes the GTK
+Wayland connection, so the existing process cannot provide meaningful
+same-process recovery. Maintained prose now limits adapter reconnection claims
+to transport loss within the current session and reserves full-session
+acceptance for a fresh Weftwise start after an orderly session cycle.
+
+Phase 5 deterministic coverage now also exercises service loss followed by a
+fresh audio snapshot, replacement of a removed default by a hotplugged device,
+move-capability revocation on route removal, rapid default-sink volume
+coalescing through the cubic display mapping, out-of-order capture graph events
+and link removal, and partial recovery from stale privacy evidence. These are
+synthetic state contracts; live device and service-restart checks remain
+separate manual evidence.
+
+Verified with the complete host default gate, the native `audio-transport`
+Clippy/test/documentation gate, and the digest-pinned Arch baseline under exact
+Rust 1.96.0. Formatting, warnings-denied Clippy, default and feature tests,
+documentation, file-size and dependency-topology checks, RustSec across 172
+dependencies, and public-safety passed.
+
 ## 2026-08-31 - Make the right-corner trigger reachable
 
 Native testing exposed a topology the horizontal activation island could not
