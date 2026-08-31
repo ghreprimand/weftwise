@@ -72,6 +72,43 @@ impl InputRegionGeometry {
         }
     }
 
+    /// Mirror a non-central top island across the output's horizontal center.
+    #[must_use]
+    pub const fn mirrored_top_island(
+        width: i32,
+        level: PresentationLevel,
+        activation: ActivationRegion,
+    ) -> Self {
+        let primary = Self::for_level(width, level, activation);
+        if !matches!(level, PresentationLevel::Selvage) || primary.width <= 0 || primary.height <= 0
+        {
+            return Self {
+                x: 0,
+                y: 0,
+                width: 0,
+                height: 0,
+            };
+        }
+        let width = if width < 0 { 0 } else { width };
+        let mirrored_x = width.saturating_sub(primary.x.saturating_add(primary.width));
+        let mirrored_end = mirrored_x.saturating_add(primary.width);
+        let primary_end = primary.x.saturating_add(primary.width);
+        if mirrored_x < primary_end && primary.x < mirrored_end {
+            return Self {
+                x: 0,
+                y: 0,
+                width: 0,
+                height: 0,
+            };
+        }
+        Self {
+            x: mirrored_x,
+            y: primary.y,
+            width: primary.width,
+            height: primary.height,
+        }
+    }
+
     /// Compute the narrow left-edge leg that makes a collapsed target reachable
     /// horizontally even when another output covers the target's top edge.
     #[must_use]
@@ -421,9 +458,10 @@ fn apply_input_region_to_surface(
     source: &'static str,
 ) {
     let geometry = InputRegionGeometry::for_level(width, level, activation);
+    let mirrored_island = InputRegionGeometry::mirrored_top_island(width, level, activation);
     let left_edge_leg = InputRegionGeometry::left_edge_leg(width, level, activation);
     let right_edge_leg = InputRegionGeometry::right_edge_leg(width, level, activation);
-    let rectangles = [geometry, left_edge_leg, right_edge_leg]
+    let rectangles = [geometry, mirrored_island, left_edge_leg, right_edge_leg]
         .into_iter()
         .filter(|rectangle| rectangle.width > 0 && rectangle.height > 0)
         .map(|rectangle| {
@@ -438,6 +476,8 @@ fn apply_input_region_to_surface(
         x = geometry.x,
         width = geometry.width,
         height = geometry.height,
+        mirrored_x = mirrored_island.x,
+        mirrored_width = mirrored_island.width,
         left_edge_width = left_edge_leg.width,
         right_edge_width = right_edge_leg.width,
         empty = geometry.width == 0,
@@ -580,6 +620,58 @@ mod tests {
             InputRegionGeometry::right_edge_leg(1920, PresentationLevel::Ribbon, activation,).width,
             0
         );
+    }
+
+    #[test]
+    fn end_anchored_top_island_is_mirrored_at_the_start_edge() {
+        let activation = ActivationRegion {
+            x: 1_812,
+            width: 96,
+            height: 12,
+            immediate: false,
+        };
+        assert_eq!(
+            InputRegionGeometry::mirrored_top_island(1_920, PresentationLevel::Selvage, activation,),
+            InputRegionGeometry {
+                x: 12,
+                y: 0,
+                width: 96,
+                height: 12,
+            }
+        );
+        assert_eq!(
+            InputRegionGeometry::mirrored_top_island(1_920, PresentationLevel::Ribbon, activation,)
+                .width,
+            0
+        );
+    }
+
+    #[test]
+    fn centered_or_full_width_island_is_not_duplicated() {
+        for activation in [
+            ActivationRegion {
+                x: 912,
+                width: 96,
+                height: 12,
+                immediate: false,
+            },
+            ActivationRegion {
+                x: 0,
+                width: 1_920,
+                height: 12,
+                immediate: false,
+            },
+        ] {
+            assert_eq!(
+                InputRegionGeometry::mirrored_top_island(
+                    1_920,
+                    PresentationLevel::Selvage,
+                    activation,
+                )
+                .width,
+                0
+            );
+        }
     }
 
     #[test]

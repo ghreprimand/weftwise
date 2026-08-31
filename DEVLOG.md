@@ -6,6 +6,21 @@ or unmeasured. Planned work is never presented as implemented behavior.
 
 ---
 
+## 2026-08-31 - Mirror the bounded activation island
+
+Native multi-output testing found that immediate entry did not make the narrow
+left-side leg as easy to acquire as the wider top island near the right edge.
+The collapsed input region now mirrors any non-central bounded top island
+across the output center, giving both top corners the same acquisition area and
+configured dwell. The existing immediate side legs remain available when an
+adjacent output makes a physical top edge hard to hold. Centered and full-width
+activation regions are not duplicated.
+
+The geometry uses GDK logical coordinates and contains no connector,
+resolution, or scale-specific exception. Automated verification covers
+end-anchored, centered, full-width, and expanded presentation states. Native
+operator acceptance remains open.
+
 ## 2026-08-31 - Localize media and enable native audio by default
 
 Session-global MPRIS state is now projected on the compositor-focused output
@@ -15,10 +30,11 @@ MPRIS does not reliably expose a window-to-output association; it avoids
 inventing one from untrusted titles or application-name heuristics.
 
 Both narrow side-corner targets now reveal immediately on horizontal entry,
-while the bounded top island retains its configured dwell. This removes the
-physical-edge advantage that made one corner easier to trigger without
-increasing the full-width application's pointer target. The same logical-pixel
-rule applies on every output and scale.
+while the bounded top island retains its configured dwell. Native follow-up
+showed that immediate timing alone did not make the narrow left leg as easy to
+acquire as the wider right-side top island; a mirrored island is handled by the
+subsequent entry. The logical-pixel rule itself remains independent of output
+name, resolution, and scale.
 
 The direct PipeWire transport is now a default Cargo feature on the supported
 OdysseyOS/Arch native baseline. CI installs and verifies the corresponding

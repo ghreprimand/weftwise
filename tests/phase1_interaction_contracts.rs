@@ -229,6 +229,15 @@ fn input_regions_are_fixed_to_visible_height_and_start_empty_before_layout() {
             height: SURFACE_HEIGHT,
         }
     );
+    assert_eq!(
+        InputRegionGeometry::mirrored_top_island(512, PresentationLevel::Selvage, activation,),
+        InputRegionGeometry {
+            x: 16,
+            y: 0,
+            width: 96,
+            height: 8,
+        }
+    );
 }
 
 #[test]

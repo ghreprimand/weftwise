@@ -39,12 +39,14 @@ reveals a 26-30 pixel Ribbon. Moving into the Ribbon keeps it open; leaving
 starts the dismissal timer. Full-width activation remains an explicit
 comparison and rollback mode.
 
-A narrow leg extends down each edge of the fixed-height surface. Either corner
-leg reveals immediately on horizontal entry, while the selected top island
-retains its configured dwell. This keeps both corners reachable when a
-neighboring output prevents the pointer from resting against an edge. If the
-top, left, and right entry edges are all internal to the monitor layout, all
-bounded entry reveals immediately. Adjacency is derived
+A mirrored pair of bounded islands covers both ends of the selected top-edge
+geometry, and a narrow leg extends down each side of the fixed-height surface.
+The two top islands use the same configured dwell. Either side leg reveals
+immediately on horizontal entry, keeping both corners reachable when a
+neighboring output prevents the pointer from resting against an edge. A
+centered or full-width island is not duplicated. If the top, left, and right
+entry edges are all internal to the monitor layout, all bounded entry reveals
+immediately. Adjacency is derived
 from GDK logical output rectangles with a small rounding tolerance, not output
 names or resolutions. Once the Ribbon is visible, the collapsed workspace and
 status marks are hidden so they cannot overlay its three text regions.
