@@ -304,6 +304,12 @@ impl AudioState {
                 if node.direction != direction {
                     return Err(AudioCommandError::WrongDirection);
                 }
+                // Only a currently routable node can be made the default; an
+                // unavailable node would ask WirePlumber to select a device it
+                // cannot use.
+                if !node.available {
+                    return Err(AudioCommandError::Unsupported);
+                }
                 ok(kind)
             }
             AudioCommandKind::MoveStream { stream, target } => {
@@ -469,6 +475,60 @@ pub struct AudioCommandOutcome {
     pub error: Option<AudioCommandError>,
 }
 
+/// SPA metadata value type used for the WirePlumber default-node keys.
+pub const DEFAULT_METADATA_TYPE: &str = "Spa:String:JSON";
+
+/// The `default` metadata key WirePlumber watches for a configured default.
+///
+/// Weftwise writes the persistent *configured* preference key rather than the
+/// runtime `default.audio.*` output key that WirePlumber itself owns. Writing
+/// the configured key is exactly how `wpctl set-default` cooperates with the
+/// session policy: WirePlumber validates the request, applies it, and then
+/// republishes the resulting `default.audio.*` selection back to the graph.
+#[must_use]
+pub const fn default_metadata_key(direction: AudioDirection) -> &'static str {
+    match direction {
+        AudioDirection::Sink => "default.configured.audio.sink",
+        AudioDirection::Source => "default.configured.audio.source",
+    }
+}
+
+/// Build the JSON value written to a configured default-node metadata key.
+///
+/// Returns the `{"name":"<node.name>"}` document WirePlumber expects, or `None`
+/// for an empty or NUL-bearing node name. `serde_json` escapes every control
+/// byte, so the produced value never carries an interior NUL into the C string
+/// boundary of the metadata transport.
+#[must_use]
+pub fn default_metadata_value(name: &str) -> Option<String> {
+    if name.is_empty() || name.contains('\0') {
+        return None;
+    }
+    serde_json::to_string(&serde_json::json!({ "name": name })).ok()
+}
+
+/// Whether a newly observed `default` metadata global should be bound.
+///
+/// Only one `default` metadata object is bound at a time. `current` is the
+/// registry global ID of the handle already retained, if any. A second
+/// concurrent object is a session-policy anomaly and is ignored until the
+/// retained one is removed, which prevents a silent route-target swap.
+#[must_use]
+pub const fn should_bind_default_metadata(current: Option<u32>) -> bool {
+    current.is_none()
+}
+
+/// Whether a `global_remove` for `removed_id` clears the retained metadata.
+///
+/// The retained handle is keyed by its registry global ID so that a destroyed
+/// `default` metadata object releases the stale proxy. Without this a recreated
+/// object would be ignored by [`should_bind_default_metadata`] and route writes
+/// would target a proxy whose backing global no longer exists.
+#[must_use]
+pub const fn should_clear_default_metadata(current: Option<u32>, removed_id: u32) -> bool {
+    matches!(current, Some(id) if id == removed_id)
+}
+
 // ---------------------------------------------------------------------------
 // SPA Props pod codec (verified by round-trip test).
 // ---------------------------------------------------------------------------
@@ -582,6 +642,7 @@ mod transport {
 
     use pipewire::context::ContextRc;
     use pipewire::main_loop::MainLoopRc;
+    use pipewire::metadata::Metadata;
     use pipewire::registry::{GlobalObject, RegistryRc};
     use pipewire::spa::param::ParamType;
     use pipewire::spa::pod::Pod;
@@ -591,10 +652,27 @@ mod transport {
 
     use super::{
         AudioCapabilities, AudioCommand, AudioCommandError, AudioCommandKind, AudioCommandOutcome,
-        AudioDirection, AudioNode, AudioNodeId, AudioUpdate, AudioVolume,
-        MAX_AUDIO_NAME_CHARACTERS, MAX_AUDIO_NODES, build_props_pod, parse_props_pod,
+        AudioDirection, AudioNode, AudioNodeId, AudioUpdate, AudioVolume, DEFAULT_METADATA_TYPE,
+        MAX_AUDIO_NAME_CHARACTERS, MAX_AUDIO_NODES, build_props_pod, default_metadata_key,
+        default_metadata_value, parse_props_pod, should_bind_default_metadata,
+        should_clear_default_metadata,
     };
     use crate::supervisor::{Cancellation, ReconnectBackoff};
+
+    /// The bound `default` metadata proxy retained for route mutation.
+    ///
+    /// Keyed by the registry global ID so a `global_remove` for that object can
+    /// release the proxy and let a recreated one rebind, instead of writing
+    /// through a stale handle. The property listener is retained alongside the
+    /// proxy so both drop together when the handle is cleared.
+    struct DefaultMetadataHandle {
+        global_id: u32,
+        proxy: Metadata,
+        _listener: pipewire::metadata::MetadataListener,
+    }
+
+    /// Shared slot for the single bound `default` metadata handle.
+    type DefaultMetadata = Rc<RefCell<Option<DefaultMetadataHandle>>>;
 
     type Publish = Arc<dyn Fn(AudioUpdate) + Send + Sync + 'static>;
 
@@ -698,10 +776,6 @@ mod transport {
 
     type Nodes = Rc<RefCell<HashMap<u32, NodeEntry>>>;
 
-    thread_local! {
-        static RETAINED: RefCell<Vec<Box<dyn std::any::Any>>> = const { RefCell::new(Vec::new()) };
-    }
-
     fn thread_main(
         publish: Publish,
         control_rx: pipewire::channel::Receiver<Control>,
@@ -724,15 +798,23 @@ mod transport {
         let nodes: Nodes = Rc::new(RefCell::new(HashMap::new()));
         let defaults = Rc::new(RefCell::new(Defaults::default()));
         let synced = Rc::new(Cell::new(false));
+        let default_metadata: DefaultMetadata = Rc::new(RefCell::new(None));
         let started = Instant::now();
 
         let quit_loop = main_loop.clone();
         let command_nodes = Rc::clone(&nodes);
+        let command_metadata = Rc::clone(&default_metadata);
         let command_publish = Arc::clone(&publish);
         let _control = control_rx.attach(main_loop.loop_(), move |control| match control {
             Control::Quit => quit_loop.quit(),
             Control::Command(command) => {
-                apply_command(&command_nodes, &command, &command_publish, started);
+                apply_command(
+                    &command_nodes,
+                    &command_metadata,
+                    &command,
+                    &command_publish,
+                    started,
+                );
             }
         });
 
@@ -740,10 +822,12 @@ mod transport {
         let global_nodes = Rc::clone(&nodes);
         let global_defaults = Rc::clone(&defaults);
         let global_synced = Rc::clone(&synced);
+        let global_metadata = Rc::clone(&default_metadata);
         let global_publish = Arc::clone(&publish);
         let remove_nodes = Rc::clone(&nodes);
         let remove_synced = Rc::clone(&synced);
         let remove_publish = Arc::clone(&publish);
+        let remove_metadata = Rc::clone(&default_metadata);
         let _registry_listener = registry
             .add_listener_local()
             .global(move |global| {
@@ -752,12 +836,22 @@ mod transport {
                     &global_nodes,
                     &global_defaults,
                     &global_synced,
+                    &global_metadata,
                     &global_publish,
                     started,
                     global,
                 );
             })
             .global_remove(move |id| {
+                let current_id = remove_metadata
+                    .borrow()
+                    .as_ref()
+                    .map(|handle| handle.global_id);
+                if should_clear_default_metadata(current_id, id) {
+                    // Release the stale proxy and listener so a recreated
+                    // `default` metadata object can rebind on its next global.
+                    *remove_metadata.borrow_mut() = None;
+                }
                 if remove_nodes.borrow_mut().remove(&id).is_some() && remove_synced.get() {
                     (remove_publish)(AudioUpdate::NodeRemoved {
                         id: AudioNodeId::new(id),
@@ -793,14 +887,15 @@ mod transport {
             .register();
 
         main_loop.run();
-        RETAINED.with(|retained| retained.borrow_mut().clear());
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn on_global(
         registry: &RegistryRc,
         nodes: &Nodes,
         defaults: &Rc<RefCell<Defaults>>,
         synced: &Rc<Cell<bool>>,
+        metadata: &DefaultMetadata,
         publish: &Publish,
         started: Instant,
         global: &GlobalObject<&DictRef>,
@@ -809,9 +904,9 @@ mod transport {
             ObjectType::Node => {
                 on_node_global(registry, nodes, defaults, synced, publish, started, global)
             }
-            ObjectType::Metadata => {
-                on_metadata_global(registry, nodes, defaults, synced, publish, started, global)
-            }
+            ObjectType::Metadata => on_metadata_global(
+                registry, nodes, defaults, synced, metadata, publish, started, global,
+            ),
             _ => {}
         }
     }
@@ -898,11 +993,13 @@ mod transport {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn on_metadata_global(
         registry: &RegistryRc,
         nodes: &Nodes,
         defaults: &Rc<RefCell<Defaults>>,
         synced: &Rc<Cell<bool>>,
+        metadata_handle: &DefaultMetadata,
         publish: &Publish,
         started: Instant,
         global: &GlobalObject<&DictRef>,
@@ -914,6 +1011,16 @@ mod transport {
         if !is_default {
             return;
         }
+        // Bind only the first `default` metadata object; a second one would be a
+        // policy anomaly and must not silently replace the route target.
+        let current_id = metadata_handle
+            .borrow()
+            .as_ref()
+            .map(|handle| handle.global_id);
+        if !should_bind_default_metadata(current_id) {
+            return;
+        }
+        let global_id = global.id;
         let Ok(metadata) = registry.bind::<pipewire::metadata::Metadata, _>(global) else {
             return;
         };
@@ -936,10 +1043,13 @@ mod transport {
                 0
             })
             .register();
-        RETAINED.with(|retained| {
-            let mut retained = retained.borrow_mut();
-            retained.push(Box::new(metadata));
-            retained.push(Box::new(listener));
+        // The proxy must outlive the loop so route commands can write to it. It
+        // is retained with its global ID and listener so a matching
+        // `global_remove` releases both and a recreated object can rebind.
+        *metadata_handle.borrow_mut() = Some(DefaultMetadataHandle {
+            global_id,
+            proxy: metadata,
+            _listener: listener,
         });
     }
 
@@ -1054,8 +1164,14 @@ mod transport {
         }
     }
 
-    fn apply_command(nodes: &Nodes, command: &AudioCommand, publish: &Publish, started: Instant) {
-        let (label, result) = dispatch(nodes, command);
+    fn apply_command(
+        nodes: &Nodes,
+        metadata: &DefaultMetadata,
+        command: &AudioCommand,
+        publish: &Publish,
+        started: Instant,
+    ) {
+        let (label, result) = dispatch(nodes, metadata, command);
         (publish)(AudioUpdate::CommandOutcome {
             outcome: AudioCommandOutcome {
                 label,
@@ -1065,7 +1181,11 @@ mod transport {
         });
     }
 
-    fn dispatch(nodes: &Nodes, command: &AudioCommand) -> (String, Result<(), AudioCommandError>) {
+    fn dispatch(
+        nodes: &Nodes,
+        metadata: &DefaultMetadata,
+        command: &AudioCommand,
+    ) -> (String, Result<(), AudioCommandError>) {
         let borrow = nodes.borrow();
         match command.kind {
             AudioCommandKind::SetVolume { id, volume } => (
@@ -1085,11 +1205,15 @@ mod transport {
                     None => ("Mute".to_owned(), Err(AudioCommandError::UnknownNode)),
                 }
             }
-            AudioCommandKind::SetDefault { .. } | AudioCommandKind::MoveStream { .. } => (
+            AudioCommandKind::SetDefault { direction, id } => (
                 "Route".to_owned(),
-                // Route mutation must cooperate with WirePlumber-owned metadata.
-                // It remains a native proof task and is reported as a transport
-                // limitation rather than silently claimed as done.
+                set_default_node(&borrow, metadata, direction, id.get()),
+            ),
+            AudioCommandKind::MoveStream { .. } => (
+                "Route".to_owned(),
+                // Per-stream movement targets a stream node this endpoint-only
+                // model does not represent, and its native contract is not
+                // verified. It stays an explicit transport limitation.
                 Err(AudioCommandError::Transport),
             ),
         }
@@ -1105,6 +1229,39 @@ mod transport {
         let bytes = build_props_pod(volume, muted).ok_or(AudioCommandError::Transport)?;
         let pod = Pod::from_bytes(&bytes).ok_or(AudioCommandError::Transport)?;
         entry.proxy.set_param(ParamType::Props, 0, pod);
+        Ok(())
+    }
+
+    /// Ask WirePlumber to make a node the configured default for its direction.
+    ///
+    /// This writes the persistent `default.configured.audio.{sink,source}` key
+    /// of the `default` metadata, the same cooperation path `wpctl set-default`
+    /// uses. WirePlumber validates and applies the request, then republishes the
+    /// resulting `default.audio.*` selection, which arrives back through the
+    /// metadata property listener as a `DefaultChanged` update. Weftwise never
+    /// writes the runtime output key directly.
+    fn set_default_node(
+        nodes: &HashMap<u32, NodeEntry>,
+        metadata: &DefaultMetadata,
+        direction: AudioDirection,
+        id: u32,
+    ) -> Result<(), AudioCommandError> {
+        let entry = nodes.get(&id).ok_or(AudioCommandError::UnknownNode)?;
+        if entry.node.direction != direction {
+            return Err(AudioCommandError::WrongDirection);
+        }
+        if !entry.node.available {
+            return Err(AudioCommandError::Unsupported);
+        }
+        let value = default_metadata_value(&entry.name).ok_or(AudioCommandError::Transport)?;
+        let handle = metadata.borrow();
+        let handle = handle.as_ref().ok_or(AudioCommandError::Transport)?;
+        handle.proxy.set_property(
+            0,
+            default_metadata_key(direction),
+            Some(DEFAULT_METADATA_TYPE),
+            Some(&value),
+        );
         Ok(())
     }
 
@@ -1331,5 +1488,98 @@ mod tests {
             "device unavailable"
         );
         assert_eq!(AudioCommandError::Transport.reason(), "audio service error");
+    }
+
+    #[test]
+    fn set_default_validation_is_capability_and_availability_gated() {
+        let mut state = AudioState::default();
+        let mut unavailable = sink(3, "offline");
+        unavailable.available = false;
+        state.apply_snapshot(vec![sink(1, "a"), source(2, "b"), unavailable], None, None);
+
+        // An available sink can become the default sink.
+        assert!(
+            state
+                .validate(AudioCommandKind::SetDefault {
+                    direction: AudioDirection::Sink,
+                    id: AudioNodeId::new(1),
+                })
+                .is_ok()
+        );
+        // A source cannot become the default sink.
+        assert_eq!(
+            state.validate(AudioCommandKind::SetDefault {
+                direction: AudioDirection::Sink,
+                id: AudioNodeId::new(2),
+            }),
+            Err(AudioCommandError::WrongDirection)
+        );
+        // An unavailable node cannot be selected as a default.
+        assert_eq!(
+            state.validate(AudioCommandKind::SetDefault {
+                direction: AudioDirection::Sink,
+                id: AudioNodeId::new(3),
+            }),
+            Err(AudioCommandError::Unsupported)
+        );
+        // An unknown node is rejected.
+        assert_eq!(
+            state.validate(AudioCommandKind::SetDefault {
+                direction: AudioDirection::Source,
+                id: AudioNodeId::new(99),
+            }),
+            Err(AudioCommandError::UnknownNode)
+        );
+    }
+
+    #[test]
+    fn default_metadata_key_targets_the_configured_preference() {
+        // Weftwise writes the persistent configured key, never the runtime
+        // output key WirePlumber owns.
+        assert_eq!(
+            default_metadata_key(AudioDirection::Sink),
+            "default.configured.audio.sink"
+        );
+        assert_eq!(
+            default_metadata_key(AudioDirection::Source),
+            "default.configured.audio.source"
+        );
+    }
+
+    #[test]
+    fn default_metadata_value_is_bounded_json_or_none() {
+        assert_eq!(
+            default_metadata_value("synthetic-sink"),
+            Some(r#"{"name":"synthetic-sink"}"#.to_owned())
+        );
+        // Empty and NUL-bearing names produce no value.
+        assert_eq!(default_metadata_value(""), None);
+        assert_eq!(default_metadata_value("bad\0name"), None);
+        // Quotes and backslashes are JSON-escaped, never injected raw.
+        assert_eq!(
+            default_metadata_value(r#"a"b\c"#),
+            Some(r#"{"name":"a\"b\\c"}"#.to_owned())
+        );
+    }
+
+    #[test]
+    fn default_metadata_binds_one_object_until_it_is_removed() {
+        // No handle retained yet: the first `default` metadata object binds.
+        assert!(should_bind_default_metadata(None));
+        // A handle is already retained: a second concurrent object is ignored
+        // so the route target cannot be silently swapped.
+        assert!(!should_bind_default_metadata(Some(41)));
+    }
+
+    #[test]
+    fn default_metadata_clears_only_on_its_own_global_removal() {
+        // A `global_remove` for the retained object's ID releases the handle.
+        assert!(should_clear_default_metadata(Some(41), 41));
+        // A removal for any other global leaves the handle intact.
+        assert!(!should_clear_default_metadata(Some(41), 42));
+        // With nothing retained there is nothing to clear.
+        assert!(!should_clear_default_metadata(None, 41));
+        // After clearing, the slot is empty and the next object may rebind.
+        assert!(should_bind_default_metadata(None));
     }
 }

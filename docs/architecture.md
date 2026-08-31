@@ -122,16 +122,31 @@ loop thread and forwards typed updates back out; the retained command sender
 keeps that supervised transport alive. No `wpctl` subprocess is polled, and no
 `wireplumber` crate is used.
 
-Volume, mute, default-route, and move-stream commands are typed and
-capability-gated by the root before dispatch. A rejected request produces
-content-free error feedback rather than a silent failure. Volume and
-microphone-mute changes on the default nodes produce temporary feedback
-candidates through the shared emitter. The displayed volume percentage uses the
-conventional cubic mapping and remains display-only pending native
-verification; the pod codec that reads and writes volume is verified by a
-serialize/parse round-trip, while live-server behavior is unmeasured. The
-adapter and its optional `pipewire` dependency compile only with the
-`audio-transport` feature; the pure domain and typed contracts build without it.
+Volume, mute, and default-route commands are typed and capability-gated by the
+root before dispatch. A rejected request produces content-free error feedback
+rather than a silent failure. Volume and microphone-mute changes on the default
+nodes produce temporary feedback candidates through the shared emitter. The
+displayed volume percentage uses the conventional cubic mapping and remains
+display-only pending native verification; the pod codec that reads and writes
+volume is verified by a serialize/parse round-trip, while live-server behavior
+is unmeasured.
+
+Default-route selection cooperates with WirePlumber policy rather than
+overriding it. Selecting a default sink or source writes the persistent
+`default.configured.audio.sink` or `default.configured.audio.source` key of the
+`default` metadata as a `Spa:String:JSON` `{"name":"<node.name>"}` value, the
+same mechanism `wpctl set-default` uses. WirePlumber validates the request,
+applies it, and republishes the resulting `default.audio.*` selection, which
+returns through the metadata property listener as a default-changed update.
+Weftwise never writes the runtime `default.audio.*` output key directly. The
+selection is capability-gated to an available node of the requested direction,
+and the metadata key and JSON value builders are verified by unit tests; the
+live metadata round-trip against a running WirePlumber remains unmeasured here.
+Per-stream movement targets a stream node this endpoint-only model does not yet
+represent and stays an explicit transport limitation until its native contract
+is verified. The adapter and its optional `pipewire` dependency compile only
+with the `audio-transport` feature; the pure domain and typed contracts build
+without it.
 
 ## Temporary feedback
 

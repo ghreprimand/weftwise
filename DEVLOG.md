@@ -6,6 +6,52 @@ or unmeasured. Planned work is never presented as implemented behavior.
 
 ---
 
+## 2026-08-30 - Add WirePlumber-cooperating default-route selection
+
+The direct PipeWire adapter now implements capability-gated default-route
+selection. Choosing a default sink or source writes the persistent
+`default.configured.audio.sink` or `default.configured.audio.source` key of the
+bound `default` metadata object as a `Spa:String:JSON` `{"name":"<node.name>"}`
+value, the same cooperation path `wpctl set-default` uses. WirePlumber remains
+the policy owner: it validates and applies the request and republishes the
+resulting `default.audio.*` selection, which returns through the existing
+metadata property listener as a default-changed update. Weftwise never writes
+the runtime output key directly, and it binds only the first `default` metadata
+object.
+
+The retained metadata handle is now keyed by its registry global ID. A
+`global_remove` for that object releases the proxy and its property listener so
+a recreated `default` metadata object rebinds on its next global, instead of the
+adapter writing route requests through a stale proxy whose backing global no
+longer exists. The single-bind and clear-on-removal decisions are pure,
+transport-independent functions with their own unit tests.
+
+The root capability gate now rejects a default-route request to an unavailable
+node or a node of the wrong direction before dispatch. Per-stream movement
+remains an explicit transport limitation: it targets a stream node this
+endpoint-only model does not represent, and its native contract is unverified.
+
+### Verification
+
+- New unit tests cover the configured-preference metadata keys, the bounded
+  JSON value builder with empty, NUL-bearing, and quote/backslash names, the
+  default-route capability and availability gate, and the metadata single-bind
+  and clear-on-global-removal lifecycle decisions.
+- The pure metadata key and value builders are transport-independent and build
+  without the `audio-transport` feature.
+- The live metadata round-trip against a running WirePlumber is unmeasured here;
+  no PipeWire session is available in this environment.
+- The complete default worktree gate passes formatting, deny-warning Clippy,
+  tests, documentation, file-size and dependency-topology checks, and
+  public-safety automation, with RustSec clean over 172 locked dependencies on
+  the host. The `audio-transport` gate passes deny-warning Clippy and 60 tests
+  with one explicit live-only ignore.
+- The same default and feature gates pass with exact Rust 1.96.0 in the
+  digest-pinned Arch environment, including the RustSec audit over the same 172
+  locked dependencies.
+
+---
+
 ## 2026-08-30 - Add Hyprland screen-sharing evidence
 
 The direct Hyprland event adapter now accepts the address-free
