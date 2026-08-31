@@ -242,14 +242,26 @@ once. Each client has a 30-second idle deadline and may submit 64 frames per
 one-second window. Existing regular files and live sockets are never replaced;
 an owned refused socket is removed as stale, with its device and inode checked
 again before unlinking. Endpoint cleanup also verifies the created socket's
-device and inode. The protocol deliberately has no executable, argument vector,
-shell command, environment, output text, or arbitrary metadata field.
+device and inode. After validating and handing off a frame, the endpoint writes
+a fixed acknowledgement. The synchronous CLI verifies the private endpoint,
+uses bounded read and write deadlines, and treats a missing or invalid
+acknowledgement as failure. The protocol deliberately has no executable,
+argument vector, shell command, environment, output text, or arbitrary metadata
+field.
 
 Validated activity is emitted as typed root messages. Root state retains at
 most 128 live identities and projects publish/update state through the activity
 arbitration source. Completion becomes bounded temporary success or warning
 feedback, while cancellation removes the source-scoped identity. The publishing
-CLI remains pending.
+CLI exposes all four operations through typed positional and named arguments.
+
+The separate `weftwise reveal` command uses GApplication's session-bus remote
+action mechanism rather than the activity schema. The primary GTK application
+exports a parameter-free action and maps it to a root message. Root state
+selects the Hyprland-focused output and applies a generation-checked 2.5-second
+Ribbon glance. Pointer entry invalidates that dismissal generation and returns
+ownership to the ordinary interaction reducer. Hyprland remains the global
+shortcut owner, so key selection is configuration rather than a GTK grab.
 
 ## Temporary feedback
 

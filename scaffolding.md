@@ -323,7 +323,11 @@ components do not replace the domain, adapter, or surface ownership layers.
 
 - A versioned, 16 KiB JSON-lines local event schema for timers and tracked work
   and its authenticated, permission-restricted, client- and rate-bounded runtime
-  endpoint are implemented; the CLI remains pending.
+  endpoint are implemented. The typed CLI publishes, updates, completes, and
+  cancels activity and waits for a bounded endpoint acknowledgement.
+- A parameter-free remote GTK application action supports a configurable
+  Hyprland binding for a bounded focused-output Ribbon glance without a GTK
+  global-key grab.
 - Explicit program-and-argument process supervision with cancellation and
   output bounds.
 - OdysseyOS workflow profile state behind an adapter boundary.

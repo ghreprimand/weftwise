@@ -53,10 +53,10 @@ The Ribbon has persistent workspace, context, and clock regions. The context
 region labels the selected candidate or active client and exposes its actions.
 The implemented Hyprland projection shows the active workspace and bounded
 window title on the focused output, and uses a boundary-aligned local clock when
-compositor context is absent. A volume change selects audio temporarily. The implemented MPRIS
-projection shows bounded title and artist text for the selected player, with
-Previous, Play/Pause, Next, and 10-second seek controls present only when the
-player advertises each capability.
+compositor context is absent. A volume change selects audio temporarily. The
+implemented MPRIS projection shows bounded title and artist text for the
+selected player, with Previous, Play/Pause, Next, and 10-second seek controls
+present only when the player advertises each capability.
 A privacy event can replace ordinary content. The fallback is time, date,
 current workspace, and active application.
 
@@ -64,10 +64,15 @@ Right-click-only and hover-tooltip-only essential actions are avoided. Scroll
 actions become active only after reveal so accidental top-edge scrolling cannot
 change system state.
 
+`weftwise reveal` provides a keyboard glance on the Hyprland-focused output.
+The recommended compositor binding is `Super+grave`, but Hyprland owns the key
+choice. The parameter-free remote action reveals the Ribbon for 2.5 seconds;
+pointer entry cancels that timeout and resumes normal pointer-owned behavior.
+It does not open the interactive Panel or install a GTK global shortcut.
+
 ### Panel
 
-Clicking the Ribbon opens the proof Panel on that output. A focused-output
-Hyprland binding is planned with compositor state in Phase 2. The Panel provides
+Clicking the Ribbon opens the proof Panel on that output. The Panel provides
 keyboard navigation; Escape and outside click dismiss it. The proof returns
 layer-shell keyboard interactivity to `None`, while real restoration to the
 prior client remains a native-session acceptance check.

@@ -3,8 +3,8 @@ use weftwise::shell::{
     surface::{ActivationRegion, InputRegionGeometry},
 };
 use weftwise::state::{
-    AppState, DISMISS_DELAY, DWELL_DELAY, InteractionEffect, InteractionInput, InteractionToken,
-    OutputId, OutputPresentation, PresentationLevel,
+    AppState, DISMISS_DELAY, DWELL_DELAY, GLANCE_DISMISS_DELAY, InteractionEffect,
+    InteractionInput, InteractionToken, OutputId, OutputPresentation, PresentationLevel,
 };
 use weftwise::widgets::SURFACE_HEIGHT;
 
@@ -52,6 +52,27 @@ fn internal_corner_entry_reveals_without_a_dwell_timer() {
     );
     assert_eq!(state.level(), PresentationLevel::Ribbon);
     assert!(state.pointer_inside());
+}
+
+#[test]
+fn keyboard_glance_reveals_without_pointer_ownership_and_has_a_bounded_timeout() {
+    let mut state = OutputPresentation::new(false);
+    let effects = state.update(InteractionInput::RevealForGlance);
+    let [
+        InteractionEffect::Render,
+        InteractionEffect::ScheduleGlanceDismiss(token),
+    ] = effects.as_slice()
+    else {
+        panic!("expected render plus glance dismissal, got {effects:?}");
+    };
+    assert_eq!(GLANCE_DISMISS_DELAY.as_millis(), 2_500);
+    assert_eq!(state.level(), PresentationLevel::Ribbon);
+    assert!(!state.pointer_inside());
+    assert_eq!(
+        state.update(InteractionInput::DismissElapsed(*token)),
+        [InteractionEffect::Render]
+    );
+    assert_eq!(state.level(), PresentationLevel::Selvage);
 }
 
 #[test]

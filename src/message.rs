@@ -53,6 +53,8 @@ pub enum AppMessage {
     },
     /// GTK's desktop animation preference changed.
     AnimationPreferenceChanged,
+    /// A remote application action requested a bounded Ribbon glance.
+    RevealRibbon,
     /// Shut down supervised work and terminate the GTK application.
     Shutdown,
 }

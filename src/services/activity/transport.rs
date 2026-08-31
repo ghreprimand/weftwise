@@ -2,14 +2,16 @@
 
 use std::fmt;
 use std::fs;
-use std::io;
+use std::io::{self, Read, Write};
+use std::net::Shutdown;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
+use std::os::unix::net::UnixStream as StdUnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use thiserror::Error;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
@@ -32,6 +34,9 @@ pub const ACTIVITY_RATE_WINDOW: Duration = Duration::from_secs(1);
 pub const ACTIVITY_CLIENT_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 /// Maximum time allowed when determining whether an existing socket is live.
 const EXISTING_ENDPOINT_PROBE_TIMEOUT: Duration = Duration::from_millis(100);
+/// Maximum time the CLI waits for a validated endpoint acknowledgement.
+pub const ACTIVITY_CLIENT_RESPONSE_TIMEOUT: Duration = Duration::from_secs(2);
+const ACTIVITY_ACKNOWLEDGEMENT: &[u8; 3] = b"ok\n";
 
 /// Public-safe endpoint setup or client failure.
 #[derive(Debug, Error)]
@@ -75,6 +80,21 @@ pub enum ActivityTransportError {
     /// A client supplied an invalid bounded protocol frame.
     #[error("the activity peer supplied an invalid frame")]
     Protocol(#[source] ActivityProtocolError),
+    /// The CLI could not verify a private owned endpoint before connecting.
+    #[error("the local activity endpoint is unavailable or unsafe")]
+    UnsafeClientEndpoint,
+    /// The CLI could not connect to the verified endpoint.
+    #[error("the local activity endpoint is not accepting connections")]
+    ClientConnect(#[source] io::Error),
+    /// The CLI could not write its bounded request.
+    #[error("the local activity request could not be sent")]
+    ClientWrite(#[source] io::Error),
+    /// The endpoint did not acknowledge the validated request in time.
+    #[error("the local activity request was not acknowledged")]
+    ClientAcknowledgement(#[source] io::Error),
+    /// The endpoint returned an unsupported acknowledgement.
+    #[error("the local activity endpoint returned an invalid acknowledgement")]
+    InvalidAcknowledgement,
 }
 
 /// Bound endpoint with ownership-aware cleanup.
@@ -167,6 +187,71 @@ impl ActivityEndpoint {
             }
         }
     }
+}
+
+/// Send one validated event and wait for the endpoint to acknowledge receipt.
+pub fn send_event(
+    paths: &ConfigPaths,
+    event: &ActivityEvent,
+) -> Result<(), ActivityTransportError> {
+    let socket_path = endpoint_path(paths)?;
+    validate_client_endpoint(&socket_path)?;
+    let mut stream =
+        StdUnixStream::connect(&socket_path).map_err(ActivityTransportError::ClientConnect)?;
+    stream
+        .set_write_timeout(Some(ACTIVITY_CLIENT_RESPONSE_TIMEOUT))
+        .map_err(ActivityTransportError::ClientWrite)?;
+    stream
+        .set_read_timeout(Some(ACTIVITY_CLIENT_RESPONSE_TIMEOUT))
+        .map_err(ActivityTransportError::ClientAcknowledgement)?;
+    let frame = super::encode_frame(event).map_err(ActivityTransportError::Protocol)?;
+    stream
+        .write_all(&frame)
+        .map_err(ActivityTransportError::ClientWrite)?;
+    stream
+        .shutdown(Shutdown::Write)
+        .map_err(ActivityTransportError::ClientWrite)?;
+    let mut acknowledgement = [0_u8; ACTIVITY_ACKNOWLEDGEMENT.len()];
+    stream
+        .read_exact(&mut acknowledgement)
+        .map_err(ActivityTransportError::ClientAcknowledgement)?;
+    if acknowledgement != *ACTIVITY_ACKNOWLEDGEMENT {
+        return Err(ActivityTransportError::InvalidAcknowledgement);
+    }
+    Ok(())
+}
+
+fn validate_client_endpoint(path: &Path) -> Result<(), ActivityTransportError> {
+    let application_dir = path
+        .parent()
+        .ok_or(ActivityTransportError::UnsafeClientEndpoint)?;
+    let runtime_base = application_dir
+        .parent()
+        .ok_or(ActivityTransportError::UnsafeClientEndpoint)?;
+    let process_uid = fs::metadata("/proc/self")
+        .map_err(|_| ActivityTransportError::UnsafeClientEndpoint)?
+        .uid();
+    let base = fs::symlink_metadata(runtime_base)
+        .map_err(|_| ActivityTransportError::UnsafeClientEndpoint)?;
+    let application = fs::symlink_metadata(application_dir)
+        .map_err(|_| ActivityTransportError::UnsafeClientEndpoint)?;
+    let socket =
+        fs::symlink_metadata(path).map_err(|_| ActivityTransportError::UnsafeClientEndpoint)?;
+    if base.file_type().is_symlink()
+        || !base.is_dir()
+        || base.uid() != process_uid
+        || base.mode() & 0o077 != 0
+        || application.file_type().is_symlink()
+        || !application.is_dir()
+        || application.uid() != process_uid
+        || application.mode() & 0o777 != PRIVATE_DIRECTORY_MODE
+        || !socket.file_type().is_socket()
+        || socket.uid() != process_uid
+        || socket.mode() & 0o777 != PRIVATE_FILE_MODE
+    {
+        return Err(ActivityTransportError::UnsafeClientEndpoint);
+    }
+    Ok(())
 }
 
 fn elapsed_millis(started: Instant) -> u64 {
@@ -287,6 +372,11 @@ where
         }
         rate.record(Instant::now())?;
         emit(decode_frame(&frame).map_err(ActivityTransportError::Protocol)?);
+        reader
+            .get_mut()
+            .write_all(ACTIVITY_ACKNOWLEDGEMENT)
+            .await
+            .map_err(ActivityTransportError::ClientIo)?;
     }
 }
 
@@ -346,7 +436,7 @@ mod tests {
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    use tokio::io::AsyncWriteExt;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     use super::*;
 
@@ -498,10 +588,45 @@ mod tests {
                 )
                 .await
                 .expect("valid frame");
+            let mut acknowledgement = [0_u8; ACTIVITY_ACKNOWLEDGEMENT.len()];
+            client
+                .read_exact(&mut acknowledgement)
+                .await
+                .expect("acknowledgement");
+            assert_eq!(acknowledgement, *ACTIVITY_ACKNOWLEDGEMENT);
             client.shutdown().await.expect("client shutdown");
         };
         let (result, ()) = tokio::join!(serve, write);
         result.expect("authenticated client");
+        assert_eq!(emitted.lock().expect("emitted lock").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn synchronous_client_validates_sends_and_waits_for_acknowledgement() {
+        let runtime = SyntheticRuntime::new();
+        let endpoint = ActivityEndpoint::bind(&runtime.paths)
+            .await
+            .expect("bound endpoint");
+        let owner_uid = endpoint.owner_uid;
+        let emitted = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&emitted);
+        let serve = async move {
+            let (stream, _address) = endpoint.listener.accept().await.expect("accepted client");
+            serve_client(stream, owner_uid, &|event| {
+                captured.lock().expect("emitted lock").push(event);
+            })
+            .await
+            .expect("served client");
+        };
+        let paths = runtime.paths.clone();
+        let client = tokio::task::spawn_blocking(move || {
+            let event = ActivityEvent::cancel("timer.synthetic").expect("cancel event");
+            send_event(&paths, &event)
+        });
+        let ((), client_result) = tokio::join!(serve, client);
+        client_result
+            .expect("client task")
+            .expect("acknowledged event");
         assert_eq!(emitted.lock().expect("emitted lock").len(), 1);
     }
 

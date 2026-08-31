@@ -104,7 +104,11 @@ Weftwise XDG runtime directory. The supervised endpoint validates the private
 runtime owner and Linux peer credentials, uses `0700` directory and `0600`
 socket modes, and bounds concurrent clients, idle reads, message rate, and
 frames. The schema contains no executable, argument-vector, or shell-command
-field. The publishing CLI remains pending.
+field. The `weftwise activity` CLI constructs this typed schema, verifies the
+private owned endpoint, and waits for a bounded validation-and-handoff
+acknowledgement. `weftwise reveal` activates the already-running GTK instance
+over its session-bus application action; a compositor binding can therefore
+show the focused Ribbon without a GTK global-key grab.
 
 The Phase 2 state slice connects to Hyprland's event socket before requesting
 bounded JSON snapshots through fresh request connections. It applies the

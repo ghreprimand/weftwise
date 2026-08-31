@@ -6,6 +6,34 @@ or unmeasured. Planned work is never presented as implemented behavior.
 
 ---
 
+## 2026-08-31 - Add typed activity CLI and keyboard Ribbon reveal
+
+The `weftwise` executable now publishes, updates, completes, and cancels typed
+Phase 6 activity through the authenticated local endpoint. The CLI constructs
+the same bounded protocol values as the service, waits for a fixed
+acknowledgement with bounded I/O deadlines, and exposes no shell command,
+program argument, or environment surface. Error diagnostics do not echo
+untrusted argument values.
+
+`weftwise reveal` now activates a parameter-free GApplication action in the
+running primary instance. It reveals the Ribbon on the compositor-focused
+output for a 2.5-second glance, leaves an already-open Panel unchanged, and
+hands dismissal ownership to the pointer if it enters the Ribbon. Hyprland
+continues to own key selection; the maintained example recommends
+`SUPER+grave` and invokes the portable command rather than embedding a local
+path.
+
+Verified with the complete host gate and native `audio-transport`
+Clippy/test/documentation gate, plus the digest-pinned Arch baseline under
+exact Rust 1.96.0. Formatting, warnings-denied Clippy, default and feature
+tests, documentation, file-size and dependency-topology checks, RustSec across
+172 dependencies, and public-safety passed. A first container attempt stopped
+before compilation because its transient `/tmp` mount prohibited execution;
+the corrected bounded run used an executable transient mount and passed. A
+live session accepted all four synthetic activity operations, exposed the
+`reveal` action, and accepted `weftwise reveal`. A physical hotkey press and the
+broader manual Hyprland proof remain operator-observed checks.
+
 ## 2026-08-31 - Mirror collapsed activation at both corners
 
 The collapsed input region now includes matching narrow legs at the top-left

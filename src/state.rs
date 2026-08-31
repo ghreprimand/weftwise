@@ -26,6 +26,8 @@ pub const DWELL_DELAY: Duration = Duration::from_millis(240);
 
 /// Delay before a pointer departure collapses the Ribbon.
 pub const DISMISS_DELAY: Duration = Duration::from_millis(360);
+/// Time a keyboard-requested glance remains visible without pointer interaction.
+pub const GLANCE_DISMISS_DELAY: Duration = Duration::from_millis(2_500);
 /// Maximum local workspace marks rendered in the navigation region.
 pub const MAX_NAVIGATION_MARKS: usize = 16;
 /// Maximum selected activity marks rendered in the center region.
@@ -726,6 +728,8 @@ pub enum InteractionInput {
     PointerEnteredImmediate,
     /// Pointer left the active visible region.
     PointerLeft,
+    /// A compositor key binding requested a bounded Ribbon glance.
+    RevealForGlance,
     /// A previously scheduled dwell timer completed.
     DwellElapsed(InteractionToken),
     /// A previously scheduled dismissal timer completed.
@@ -745,6 +749,8 @@ pub enum InteractionEffect {
     ScheduleDwell(InteractionToken),
     /// Schedule a dismissal timer with the supplied generation.
     ScheduleDismiss(InteractionToken),
+    /// Schedule the longer dismissal used by a keyboard-requested glance.
+    ScheduleGlanceDismiss(InteractionToken),
     /// Re-render the output surface from authoritative state.
     Render,
 }
@@ -794,6 +800,7 @@ impl OutputPresentation {
             InteractionInput::PointerEntered => self.pointer_entered(),
             InteractionInput::PointerEnteredImmediate => self.pointer_entered_immediate(),
             InteractionInput::PointerLeft => self.pointer_left(),
+            InteractionInput::RevealForGlance => self.reveal_for_glance(),
             InteractionInput::DwellElapsed(token) => self.dwell_elapsed(token),
             InteractionInput::DismissElapsed(token) => self.dismiss_elapsed(token),
             InteractionInput::OpenPanel => self.open_panel(),
@@ -831,6 +838,21 @@ impl OutputPresentation {
         } else {
             Vec::new()
         }
+    }
+
+    fn reveal_for_glance(&mut self) -> Vec<InteractionEffect> {
+        if self.level == PresentationLevel::Panel {
+            return Vec::new();
+        }
+        self.pointer_inside = false;
+        let token = self.next_token();
+        let mut effects = Vec::with_capacity(2);
+        if self.level == PresentationLevel::Selvage {
+            self.level = PresentationLevel::Ribbon;
+            effects.push(InteractionEffect::Render);
+        }
+        effects.push(InteractionEffect::ScheduleGlanceDismiss(token));
+        effects
     }
 
     fn dwell_elapsed(&mut self, token: InteractionToken) -> Vec<InteractionEffect> {
@@ -1141,6 +1163,18 @@ impl AppState {
     /// Iterate over output identities without exposing shell objects.
     pub fn output_ids(&self) -> impl Iterator<Item = OutputId> + '_ {
         self.outputs.keys().copied()
+    }
+
+    /// Resolve the GDK surface bound to the compositor-focused output.
+    #[must_use]
+    pub fn focused_output(&self) -> Option<OutputId> {
+        self.outputs.keys().copied().find(|id| {
+            self.output_connectors
+                .get(id)
+                .and_then(Option::as_ref)
+                .and_then(|name| self.desktop.outputs.get(name))
+                .is_some_and(|output| output.focused)
+        })
     }
 
     fn refresh_arbitration_selections(&mut self) {
@@ -1609,6 +1643,29 @@ mod tests {
     }
 
     #[test]
+    fn keyboard_glance_reveals_temporarily_and_pointer_entry_takes_ownership() {
+        let mut state = OutputPresentation::new(false);
+        let effects = state.update(InteractionInput::RevealForGlance);
+        let [
+            InteractionEffect::Render,
+            InteractionEffect::ScheduleGlanceDismiss(glance),
+        ] = effects.as_slice()
+        else {
+            panic!("keyboard reveal must render and schedule its bounded dismissal");
+        };
+        assert_eq!(state.level(), PresentationLevel::Ribbon);
+        assert!(!state.pointer_inside());
+
+        state.update(InteractionInput::PointerEntered);
+        assert!(
+            state
+                .update(InteractionInput::DismissElapsed(*glance))
+                .is_empty()
+        );
+        assert_eq!(state.level(), PresentationLevel::Ribbon);
+    }
+
+    #[test]
     fn panel_is_pinned_until_explicitly_closed() {
         let mut state = OutputPresentation::new(false);
         let dwell = scheduled_dwell(&mut state);
@@ -1667,6 +1724,7 @@ mod tests {
                 fullscreen: false,
             },
         );
+        assert_eq!(state.focused_output(), Some(second_id));
         state.set_clock_label("12:00".to_owned());
         state.apply_arbitration(
             ArbitrationInput::Upsert(PresentationCandidate {

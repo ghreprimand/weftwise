@@ -83,7 +83,35 @@ application directory and `0600` to the socket, and authenticates Linux peer
 credentials. Protocol frames are JSON lines capped at 16 KiB; concurrent
 clients, per-client idle time, and per-client message rate are bounded. A safe
 owned refused socket is treated as stale, but a regular file, foreign socket,
-or live endpoint is never replaced. The CLI remains pending.
+or live endpoint is never replaced. The CLI verifies that same ownership and
+mode boundary before connecting, then waits at most two seconds for the fixed
+acknowledgement sent after validation and root-message handoff.
+
+Publish, update, complete, or cancel synthetic tracked activity with typed
+arguments:
+
+```sh
+weftwise activity publish build.synthetic build "Synthetic build" --progress-bp 2500
+weftwise activity update build.synthetic --progress-bp 7500
+weftwise activity complete build.synthetic succeeded --label "Synthetic build complete"
+weftwise activity cancel build.synthetic
+```
+
+Run `weftwise --help` for the complete bounded grammar. Labels are display data;
+the CLI has no option for a command, argument vector, environment, or shell
+string.
+
+The running GTK application exports a typed `reveal` action on the session bus.
+Hyprland can own a configurable global binding without giving GTK a global key
+grab. The recommended default is spatially aligned with the top-edge surface:
+
+```ini
+bind = SUPER, grave, exec, weftwise reveal
+```
+
+`weftwise reveal` targets the compositor-focused output, falls back
+deterministically when focus state is unavailable, and dismisses after 2.5
+seconds unless pointer or Panel interaction takes ownership.
 
 `config/example.toml` contains synthetic values only. Test fixtures must also
 use invented identities, paths, desktop text, metadata, hosts, outputs, and

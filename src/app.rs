@@ -22,8 +22,8 @@ use crate::services::{activity, clock, hyprland, logind};
 use crate::shell::outputs::{OutputChanges, ShellEvent, SurfaceError, SurfaceManager};
 use crate::shell::{ProofOptionError, ProofOptions};
 use crate::state::{
-    AppState, DISMISS_DELAY, DWELL_DELAY, InteractionEffect, InteractionInput, InteractionToken,
-    OutputId,
+    AppState, DISMISS_DELAY, DWELL_DELAY, GLANCE_DISMISS_DELAY, InteractionEffect,
+    InteractionInput, InteractionToken, OutputId,
 };
 use crate::supervisor::{RuntimeConfigurationError, Supervisor, configure_relm_runtime};
 
@@ -210,6 +210,12 @@ impl SimpleComponent for AppModel {
 
         let mut state = init.state;
         let application = relm4::main_application();
+        let reveal_action = gtk::gio::SimpleAction::new(crate::cli::REVEAL_ACTION, None);
+        let reveal_sender = sender.input_sender().clone();
+        reveal_action.connect_activate(move |_, _| {
+            let _ = reveal_sender.send(AppMessage::RevealRibbon);
+        });
+        application.add_action(&reveal_action);
         let surfaces = match SurfaceManager::new(
             &application,
             init.options.exclusive_zone,
@@ -295,6 +301,7 @@ impl SimpleComponent for AppModel {
                 token,
             } => self.handle_timer(output, kind, token, &sender),
             AppMessage::AnimationPreferenceChanged => self.update_motion_preference(&sender),
+            AppMessage::RevealRibbon => self.reveal_focused_ribbon(&sender),
             AppMessage::Shutdown => self.shutdown_owned(),
         }
     }
@@ -437,8 +444,25 @@ impl AppModel {
                     DISMISS_DELAY,
                     sender.input_sender().clone(),
                 ),
+                InteractionEffect::ScheduleGlanceDismiss(token) => self.timers.schedule(
+                    output,
+                    TimerKind::Dismiss,
+                    token,
+                    GLANCE_DISMISS_DELAY,
+                    sender.input_sender().clone(),
+                ),
                 InteractionEffect::Render => self.render(output),
             }
+        }
+    }
+
+    fn reveal_focused_ribbon(&mut self, sender: &ComponentSender<Self>) {
+        let output = self
+            .state
+            .focused_output()
+            .or_else(|| self.state.output_ids().next());
+        if let Some(output) = output {
+            self.apply_interaction(output, InteractionInput::RevealForGlance, sender);
         }
     }
 
