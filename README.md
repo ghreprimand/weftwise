@@ -75,7 +75,8 @@ The Phase 1 native proof code provides:
 1. one top-edge overlay surface per GDK output;
 2. fixed transparent geometry with a 3-pixel visual Selvage and a bounded
    exposed-edge activation island;
-3. deterministic dwell reveal, delayed dismissal, and explicit Panel state;
+3. deterministic dwell or opt-in entry reveal, delayed dismissal, and explicit
+   Panel state;
 4. Ribbon animation with GTK and explicit reduced-motion handling;
 5. an attached keyboard-navigable Panel with Escape and outside-click
    dismissal; and
@@ -94,7 +95,9 @@ leg at each corner makes the default trigger reachable horizontally when the
 top edge is internal to a stacked output layout. When the top, left, and right
 entry edges all lead directly into other outputs, topology detection reveals
 on bounded entry instead of requiring an impossible physical-edge dwell. The
-default charcoal/coral treatment is intentionally neutral; copy
+optional `reveal_on_entry` setting applies that immediate behavior to every
+bounded trigger. The default charcoal/coral treatment is intentionally neutral;
+copy
 `config/example.toml` into the XDG configuration location to customize it.
 
 The Phase 6 activity foundation defines a versioned, 16 KiB JSON-lines schema

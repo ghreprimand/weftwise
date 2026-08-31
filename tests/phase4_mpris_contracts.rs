@@ -1,7 +1,7 @@
 use weftwise::context::arbitration::CandidateAction;
 use weftwise::services::mpris::MediaUpdate;
 use weftwise::state::{
-    AdapterAvailability, AppState, CompositorOutput, MediaCapabilities, MediaMetadata,
+    AdapterAvailability, AppState, CompositorOutput, DisplayText, MediaCapabilities, MediaMetadata,
     MediaPlaybackStatus, MediaPlayer, MediaPlayerId, OutputId, OutputName,
 };
 
@@ -189,6 +189,7 @@ fn session_global_media_is_projected_only_on_the_focused_output() {
             fullscreen: false,
         },
     );
+    state.desktop.active.title = DisplayText::new("Focused synthetic client", 256);
 
     state.apply_media_update(MediaUpdate::Snapshot {
         players: vec![player(
@@ -208,7 +209,12 @@ fn session_global_media_is_projected_only_on_the_focused_output() {
 
     let focused = state.output_view(second).expect("focused output");
     assert_eq!(focused.activity.len(), 1);
-    assert!(focused.ribbon_context_label.contains("Synthetic title"));
+    assert_eq!(focused.ribbon_context_label, "Focused synthetic client");
+    assert!(
+        focused
+            .ribbon_accessible_label
+            .contains("Focused synthetic client")
+    );
     assert!(state.selected_media_player(second).is_some());
 }
 

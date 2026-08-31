@@ -15,6 +15,7 @@ width = 96
 height = 12
 margin = 12
 anchor = "end"
+reveal_on_entry = false
 
 [ribbon]
 show_workspace = true

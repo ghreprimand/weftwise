@@ -1121,12 +1121,28 @@ impl AppState {
             .map(|projection| projection.label.clone())
             .filter(|label| !label.is_empty())
             .unwrap_or(fallback_label);
-        let ribbon_accessible_label = detailed_candidate
-            .map(|projection| projection.accessible_label.clone())
-            .filter(|label| !label.is_empty())
-            .unwrap_or_else(|| format!("Ribbon: {ribbon_label}"));
         let (ribbon_navigation_label, ribbon_context_label, ribbon_status_label) =
             self.ribbon_region_labels(compositor_output, focused, detailed_candidate);
+        let ribbon_accessible_label = detailed_candidate
+            .filter(|projection| {
+                projection.source != CandidateSource::Media
+                    || !focused
+                    || self.focused_client_title().is_none()
+            })
+            .map(|projection| projection.accessible_label.clone())
+            .filter(|label| !label.is_empty())
+            .unwrap_or_else(|| {
+                let visible = [
+                    ribbon_navigation_label.as_str(),
+                    ribbon_context_label.as_str(),
+                    ribbon_status_label.as_str(),
+                ]
+                .into_iter()
+                .filter(|label| !label.is_empty())
+                .collect::<Vec<_>>()
+                .join(", ");
+                format!("Ribbon: {visible}")
+            });
         let (mut activity, mut attention) =
             candidate.map(candidate_status_marks).unwrap_or_default();
         activity.truncate(MAX_ACTIVITY_MARKS);
@@ -1224,18 +1240,7 @@ impl AppState {
     }
 
     fn active_context_label(&self) -> String {
-        let title = self
-            .desktop
-            .active
-            .client
-            .as_ref()
-            .and_then(|address| self.desktop.clients.get(address))
-            .map(|client| client.title.as_str())
-            .filter(|title| !title.is_empty())
-            .or_else(|| {
-                (!self.desktop.active.title.is_empty())
-                    .then_some(self.desktop.active.title.as_str())
-            });
+        let title = self.focused_client_title();
         let workspace = self
             .desktop
             .active
@@ -1250,6 +1255,20 @@ impl AppState {
             (None, Some(title)) => title.to_owned(),
             (None, None) => self.clock_fallback(),
         }
+    }
+
+    pub(super) fn focused_client_title(&self) -> Option<&str> {
+        self.desktop
+            .active
+            .client
+            .as_ref()
+            .and_then(|address| self.desktop.clients.get(address))
+            .map(|client| client.title.as_str())
+            .filter(|title| !title.is_empty())
+            .or_else(|| {
+                (!self.desktop.active.title.is_empty())
+                    .then_some(self.desktop.active.title.as_str())
+            })
     }
 
     fn clock_fallback(&self) -> String {

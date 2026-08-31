@@ -240,11 +240,9 @@ impl TopEdgeWidgets {
         popover.add_css_class("weftwise-panel");
         popover.set_parent(&ribbon_button);
 
-        let close_popover = popover.downgrade();
+        let close_emit = emit.clone();
         close_button.connect_clicked(move |_| {
-            if let Some(popover) = close_popover.upgrade() {
-                popover.popdown();
-            }
+            close_emit(AppAction::ClosePanel(output));
         });
 
         let escape_controller = gtk::EventControllerKey::new();

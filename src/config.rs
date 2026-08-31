@@ -86,6 +86,8 @@ pub struct ActivationConfig {
     pub margin: u16,
     /// Island alignment within the selected exposed segment.
     pub anchor: ActivationAnchor,
+    /// Reveal immediately on pointer entry instead of waiting for dwell.
+    pub reveal_on_entry: bool,
 }
 
 impl Default for ActivationConfig {
@@ -96,6 +98,7 @@ impl Default for ActivationConfig {
             height: 12,
             margin: 12,
             anchor: ActivationAnchor::End,
+            reveal_on_entry: false,
         }
     }
 }
@@ -612,6 +615,7 @@ mod tests {
                 height = 7
                 margin = 16
                 anchor = "end"
+                reveal_on_entry = true
 
                 [ribbon]
                 show_workspace = true
@@ -627,6 +631,7 @@ mod tests {
         .expect("valid nested configuration");
         assert_eq!(config.activation.width, 128);
         assert_eq!(config.activation.height, 7);
+        assert!(config.activation.reveal_on_entry);
         assert!(!config.ribbon.show_context);
         assert_eq!(config.theme.accent, "#AABBCC");
         assert_eq!(config.theme.font_family, "Synthetic Mono");

@@ -427,7 +427,9 @@ The current startup loader accepts validated semantic theme tokens rather than
 arbitrary CSS. Hex colors, a restricted font-family string, font size, and
 radius are converted into application-priority GTK CSS. The same versioned
 configuration controls exposed-edge activation geometry and visibility of the
-workspace, context, and clock Ribbon regions. Live reload remains planned.
+workspace, context, and clock Ribbon regions. Entry reveal can be enabled as an
+explicit alternative to dwell without changing the visual Selvage geometry.
+Live reload remains planned.
 
 ## Module boundaries
 

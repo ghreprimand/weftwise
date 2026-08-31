@@ -6,6 +6,32 @@ or unmeasured. Planned work is never presented as implemented behavior.
 
 ---
 
+## 2026-08-31 - Preserve focused context and authoritative Panel dismissal
+
+The Panel close button now emits only the typed close action and leaves popover
+visibility to the root-owned presentation state. This keeps the closing pointer
+gesture from reaching the Ribbon underneath and immediately reopening the
+Panel. Escape and outside-click dismissal continue through the same root state.
+
+Passive MPRIS activity no longer replaces a known focused-client title in the
+Ribbon context region. The selected player retains its focused-output activity
+mark, progress, capability-gated Panel actions, and text fallback when no
+focused-client title is available. Higher-severity candidates and temporary
+direct feedback retain their arbitration behavior.
+
+The activation table now accepts `reveal_on_entry = true` as an opt-in
+alternative to dwell. It applies the existing immediate-entry transition to
+every bounded island and side leg without expanding input geometry. Dwell
+remains the default to avoid accidental reveals during ordinary top-edge
+crossings.
+
+Verified with the complete host default gate and explicit transport-free
+Clippy, tests, and documentation. The default library suite passed 128 tests
+with one live-system-bus test explicitly ignored; the transport-free suite
+passed 127 with the same ignore. All integration suites, file-size and
+dependency-topology checks, RustSec across 172 dependencies, and worktree
+public-safety passed. Native operator acceptance remains open.
+
 ## 2026-08-31 - Mirror the bounded activation island
 
 Native multi-output testing found that immediate entry did not make the narrow

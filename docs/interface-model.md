@@ -51,16 +51,19 @@ from GDK logical output rectangles with a small rounding tolerance, not output
 names or resolutions. Once the Ribbon is visible, the collapsed workspace and
 status marks are hidden so they cannot overlay its three text regions.
 
-The Ribbon has persistent workspace, context, and clock regions. The context
-region labels the selected candidate or active client and exposes its actions.
+The Ribbon has persistent workspace, context, and clock regions. A known
+focused-client title remains the primary context. Passive media stays visible
+as activity and retains its actions without replacing that title; media text is
+used when focused-client context is unavailable. Higher-severity candidates
+and temporary direct feedback may replace ordinary context.
 The implemented Hyprland projection shows the active workspace and bounded
 window title on the focused output, and uses a boundary-aligned local clock when
 compositor context is absent. A volume change selects audio temporarily. The
-implemented MPRIS projection shows bounded title and artist text for the
-selected player on the compositor-focused output only. MPRIS is session-global
-and does not reliably expose a window-to-output association, so media is never
-duplicated across every Ribbon. Previous, Play/Pause, Next, and 10-second seek
-controls are present only when the player advertises each capability.
+implemented MPRIS projection shows the selected player on the
+compositor-focused output only. MPRIS is session-global and does not reliably
+expose a window-to-output association, so media is never duplicated across
+every Ribbon. Previous, Play/Pause, Next, and 10-second seek controls are
+present only when the player advertises each capability.
 A privacy event can replace ordinary content. The fallback is time, date,
 current workspace, and active application.
 

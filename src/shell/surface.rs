@@ -287,7 +287,8 @@ pub fn activation_region(
         x: global_x.saturating_sub(target.x),
         width,
         height,
-        immediate: top_edge_is_internal && left_edge_is_internal && right_edge_is_internal,
+        immediate: config.reveal_on_entry
+            || (top_edge_is_internal && left_edge_is_internal && right_edge_is_internal),
     }
 }
 
@@ -756,5 +757,23 @@ mod tests {
         let region = activation_region(target, &[target, above], &ActivationConfig::default());
 
         assert!(!region.immediate);
+    }
+
+    #[test]
+    fn configured_entry_reveal_bypasses_dwell_for_any_output_topology() {
+        let target = OutputRectangle {
+            x: 100,
+            y: 100,
+            width: 400,
+            height: 200,
+        };
+        let config = ActivationConfig {
+            reveal_on_entry: true,
+            ..ActivationConfig::default()
+        };
+
+        let region = activation_region(target, &[target], &config);
+
+        assert!(region.immediate);
     }
 }

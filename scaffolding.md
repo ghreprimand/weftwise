@@ -75,8 +75,10 @@ Potential contextual content, in rough priority order:
 
 1. Privacy-critical state: microphone use, screen sharing, recording, camera, or an active idle inhibitor.
 2. Timed activity: timer, build, download, render, update, or other process progress.
-3. Active media: title, artist, progress, and compact playback controls.
-4. Active workspace/window context: application, title, project, Git branch, and dirty state where available.
+3. Active workspace/window context: application, title, project, Git branch,
+   and dirty state where available.
+4. Active media: title, artist, progress, and compact playback controls without
+   replacing a known focused-window title.
 5. Temporary feedback: volume, brightness, screenshot, clipboard, or command results.
 6. Fallback: time and date.
 
@@ -385,7 +387,8 @@ The first milestone is complete when:
 3. Holding the pointer at the top edge reveals a Ribbon without intercepting
    pointer input in transparent collapsed space.
 4. It shows the active window/workspace and falls back to the clock.
-5. Playing media causes MPRIS information to take priority according to a documented policy.
+5. Playing media exposes MPRIS activity and controls without replacing a known
+   focused-window title.
 6. Clicking the Ribbon opens a small interactive Panel that dismisses reliably
    with Escape and outside click while restoring prior focus.
 7. Hyprland or the media player can restart without permanently breaking the application.
