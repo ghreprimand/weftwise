@@ -564,6 +564,8 @@ pub enum HyprlandEvent {
     },
     /// The active client's fullscreen state changed.
     FullscreenChanged(bool),
+    /// One Hyprland screencopy client started or stopped.
+    ScreencastChanged(bool),
     /// A workspace was created.
     WorkspaceCreated(WorkspaceState),
     /// A workspace was removed.
@@ -884,6 +886,7 @@ pub struct AppState {
     pub media: MediaState,
     /// Root-owned privacy evidence domain state.
     pub privacy: PrivacyDomain,
+    hyprland_screencasts: u16,
     /// Root-owned PipeWire audio domain state.
     pub audio: AudioState,
     feedback: FeedbackEmitter,
@@ -954,6 +957,7 @@ impl AppState {
     pub fn apply_hyprland_update(&mut self, update: HyprlandUpdate) -> Vec<OutputId> {
         match update {
             HyprlandUpdate::Connecting => {
+                self.support_hyprland_screencast_evidence();
                 self.desktop.availability = if self.desktop.outputs.is_empty()
                     && self.desktop.workspaces.is_empty()
                     && self.desktop.clients.is_empty()
@@ -964,6 +968,7 @@ impl AppState {
                 };
             }
             HyprlandUpdate::Snapshot(snapshot) => {
+                self.reset_hyprland_screencast_evidence();
                 self.desktop = DesktopState {
                     availability: AdapterAvailability::Ready,
                     outputs: snapshot.outputs,
@@ -973,8 +978,12 @@ impl AppState {
                 };
             }
             HyprlandUpdate::Event(event) => self.apply_hyprland_event(event),
-            HyprlandUpdate::Gap => self.desktop.availability = AdapterAvailability::Stale,
+            HyprlandUpdate::Gap => {
+                self.stale_hyprland_screencast_evidence();
+                self.desktop.availability = AdapterAvailability::Stale;
+            }
             HyprlandUpdate::Unavailable => {
+                self.unavailable_hyprland_screencast_evidence();
                 self.desktop.availability = if self.desktop.outputs.is_empty()
                     && self.desktop.workspaces.is_empty()
                     && self.desktop.clients.is_empty()
@@ -1349,6 +1358,9 @@ impl AppState {
                 {
                     client.fullscreen = fullscreen;
                 }
+            }
+            HyprlandEvent::ScreencastChanged(active) => {
+                self.apply_hyprland_screencast_event(active);
             }
             HyprlandEvent::WorkspaceCreated(workspace) => {
                 self.desktop

@@ -63,6 +63,26 @@ fn event_parser_uses_the_first_delimiter_and_tolerates_unknown_events() {
 }
 
 #[test]
+fn screencast_v2_is_typed_without_retaining_the_shared_target() {
+    assert_eq!(
+        parse_event_line("screencastv2>>1,window,Synthetic title, with comma").unwrap(),
+        Some(HyprlandEvent::ScreencastChanged(true))
+    );
+    assert_eq!(
+        parse_event_line("screencastv2>>0,region,Synthetic region").unwrap(),
+        Some(HyprlandEvent::ScreencastChanged(false))
+    );
+    assert_eq!(parse_event_line("screencast>>1,1").unwrap(), None);
+    for malformed in [
+        "screencastv2>>2,monitor,Synthetic output",
+        "screencastv2>>1,other,Synthetic target",
+        "screencastv2>>1,window",
+    ] {
+        assert_eq!(parse_event_line(malformed), Err(ParseError::MalformedEvent));
+    }
+}
+
+#[test]
 fn malformed_and_truncated_event_shapes_are_rejected_without_payload_echo() {
     for line in [
         "no-delimiter",

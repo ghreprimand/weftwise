@@ -5,7 +5,10 @@ use weftwise::services::audio::{
     AudioCapabilities, AudioCommandKind, AudioDirection, AudioNode, AudioNodeId, AudioUpdate,
     AudioVolume, MAX_AUDIO_NAME_CHARACTERS, MAX_AUDIO_NODES,
 };
-use weftwise::state::{AdapterAvailability, AppState, MarkPattern, MarkShape, OutputId};
+use weftwise::state::{
+    AdapterAvailability, AppState, HyprlandEvent, HyprlandSnapshot, HyprlandUpdate, MarkPattern,
+    MarkShape, OutputId,
+};
 
 fn state_with_output(id: u64) -> (AppState, OutputId) {
     let output = OutputId::new(id);
@@ -139,6 +142,52 @@ fn unavailable_and_stale_privacy_evidence_stays_visible_until_a_fresh_observatio
     assert_eq!(
         recovered.attention[0].accessible_label,
         "Screen sharing unavailable"
+    );
+}
+
+#[test]
+fn hyprland_screencast_clients_are_counted_and_gaps_remain_uncertain() {
+    let (mut state, output) = state_with_output(65);
+    state.apply_hyprland_update(HyprlandUpdate::Snapshot(HyprlandSnapshot::default()));
+    assert!(state.privacy.is_supported(PrivacyEvidence::ScreenShare));
+    assert_eq!(
+        state.privacy.state(PrivacyEvidence::ScreenShare),
+        PrivacyState::Unknown
+    );
+
+    state.apply_hyprland_update(HyprlandUpdate::Event(HyprlandEvent::ScreencastChanged(
+        true,
+    )));
+    state.apply_hyprland_update(HyprlandUpdate::Event(HyprlandEvent::ScreencastChanged(
+        true,
+    )));
+    state.apply_hyprland_update(HyprlandUpdate::Event(HyprlandEvent::ScreencastChanged(
+        false,
+    )));
+    assert_eq!(
+        state.privacy.state(PrivacyEvidence::ScreenShare),
+        PrivacyState::Active
+    );
+    assert_eq!(state.output_view(output).unwrap().attention.len(), 1);
+
+    state.apply_hyprland_update(HyprlandUpdate::Event(HyprlandEvent::ScreencastChanged(
+        false,
+    )));
+    assert_eq!(
+        state.privacy.state(PrivacyEvidence::ScreenShare),
+        PrivacyState::Unknown
+    );
+    state.apply_hyprland_update(HyprlandUpdate::Gap);
+    assert_eq!(
+        state.privacy.state(PrivacyEvidence::ScreenShare),
+        PrivacyState::Stale
+    );
+    assert_eq!(state.output_view(output).unwrap().attention.len(), 1);
+
+    state.apply_hyprland_update(HyprlandUpdate::Snapshot(HyprlandSnapshot::default()));
+    assert_eq!(
+        state.privacy.state(PrivacyEvidence::ScreenShare),
+        PrivacyState::Unknown
     );
 }
 

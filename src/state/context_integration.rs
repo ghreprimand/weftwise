@@ -2,11 +2,61 @@
 
 use crate::context::arbitration::{ArbitrationInput, CandidateSource};
 use crate::context::feedback::{FeedbackEvent, FeedbackKind};
-use crate::context::privacy::PrivacyUpdate;
+use crate::context::privacy::{PrivacyEvidence, PrivacyState, PrivacyUpdate};
 
 use super::{AppState, OutputId};
 
 impl AppState {
+    pub(super) fn support_hyprland_screencast_evidence(&mut self) {
+        self.apply_privacy_update(
+            PrivacyUpdate::Supported {
+                evidence: PrivacyEvidence::ScreenShare,
+                supported: true,
+            },
+            0,
+        );
+    }
+
+    pub(super) fn reset_hyprland_screencast_evidence(&mut self) {
+        self.hyprland_screencasts = 0;
+        self.support_hyprland_screencast_evidence();
+        self.publish_hyprland_screencast_state(PrivacyState::Unknown);
+    }
+
+    pub(super) fn apply_hyprland_screencast_event(&mut self, active: bool) {
+        self.hyprland_screencasts = if active {
+            self.hyprland_screencasts.saturating_add(1)
+        } else {
+            self.hyprland_screencasts.saturating_sub(1)
+        };
+        let state = if self.hyprland_screencasts > 0 {
+            PrivacyState::Active
+        } else {
+            PrivacyState::Unknown
+        };
+        self.publish_hyprland_screencast_state(state);
+    }
+
+    pub(super) fn stale_hyprland_screencast_evidence(&mut self) {
+        self.hyprland_screencasts = 0;
+        self.publish_hyprland_screencast_state(PrivacyState::Stale);
+    }
+
+    pub(super) fn unavailable_hyprland_screencast_evidence(&mut self) {
+        self.hyprland_screencasts = 0;
+        self.apply_privacy_update(PrivacyUpdate::Unavailable(PrivacyEvidence::ScreenShare), 0);
+    }
+
+    fn publish_hyprland_screencast_state(&mut self, state: PrivacyState) {
+        self.apply_privacy_update(
+            PrivacyUpdate::Observed {
+                evidence: PrivacyEvidence::ScreenShare,
+                state,
+            },
+            0,
+        );
+    }
+
     /// Apply one privacy observation and republish privacy candidates.
     ///
     /// The privacy domain is republished as a whole: stale `Privacy`-source

@@ -90,6 +90,13 @@ distinguished from capture by these transports and remain unsupported as
 separate detections. Any incomplete, ambiguous, disconnected, or gap-affected
 source remains unknown, unavailable, or stale rather than becoming inactive.
 
+The Hyprland adapter consumes address-free `screencastv2` lifecycle events and
+counts concurrent screencopy clients with bounded state. It validates the
+monitor, window, or region owner category but discards the shared target name.
+Only a positive count is active. Zero remains unknown because socket2 provides
+no initial screencast snapshot, and a parse gap, compositor restart, or socket
+loss changes the source to stale or unavailable before reconnect.
+
 The implemented logind adapter subscribes to login1 service-owner and manager
 property changes before taking a bounded `ListInhibitors` snapshot. It retains
 none of the returned owner, reason, mode, user, or process fields and publishes

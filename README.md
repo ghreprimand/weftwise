@@ -124,6 +124,12 @@ positive logind record is active; an empty logind snapshot remains unknown
 because compositor-protocol inhibitors are outside logind. Service loss is
 visible as unavailable and reconnects with bounded backoff.
 
+Hyprland `screencastv2` events provide positive screen-sharing evidence. The
+adapter counts concurrent clients without retaining the shared monitor, window,
+or region name. A zero count remains unknown because the event socket has no
+initial screencast snapshot; event gaps and transport loss remain visible as
+stale or unavailable.
+
 Claims in project documentation describe implemented behavior only when they
 are accompanied by verification. Planned behavior is labeled as planned.
 

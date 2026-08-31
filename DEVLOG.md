@@ -6,6 +6,43 @@ or unmeasured. Planned work is never presented as implemented behavior.
 
 ---
 
+## 2026-08-30 - Add Hyprland screen-sharing evidence
+
+The direct Hyprland event adapter now accepts the address-free
+`screencastv2` lifecycle event as positive screen-sharing evidence. It validates
+the state and monitor, window, or region owner category, discards the shared
+target name, and ignores the paired legacy event. Root state keeps a bounded
+concurrent-client count so one stopping client cannot hide another active
+client.
+
+The event socket has no initial screencast snapshot, so a zero count remains
+unknown rather than inactive. A positive count is active, and parse gaps,
+compositor restart, or socket loss produces stale or unavailable uncertainty
+before the independently supervised adapter reconnects. A fresh compositor
+snapshot resets the count to unknown before buffered v2 events replay.
+
+### Verification
+
+- Parser contracts cover active and stopped v2 events, comma-containing target
+  names, legacy suppression, invalid states, invalid owner categories, and
+  truncated fields.
+- Root contracts cover two concurrent clients, partial and complete teardown,
+  stale gap handling, and fresh-snapshot recovery without false inactive state.
+- The complete host gate passes formatting, deny-warning Clippy, 112 default
+  tests with one explicit live-only ignore, documentation, file-size and
+  dependency-topology checks, public-safety automation, and RustSec over 172
+  locked dependencies. The feature gate passes deny-warning Clippy, 114 tests
+  with the same explicit ignore, and documentation.
+- The same complete default and feature gates pass with exact Rust 1.96.0 in
+  the digest-pinned Arch environment against PipeWire 1.6.8, `libspa-0.2`, GTK
+  4.22.4, and gtk4-layer-shell 1.3.0.
+- Hosted verification remains pending for this landing.
+
+### Next
+
+- Add positive PipeWire microphone and camera capture evidence, and retain
+  recording as unsupported until a selected source can distinguish it.
+
 ## 2026-08-30 - Add bounded logind idle-inhibitor evidence
 
 A supervised systemd-logind adapter now feeds typed idle-inhibitor evidence to
@@ -37,7 +74,7 @@ state.
 - The same complete default and feature gates pass with exact Rust 1.96.0 in
   the digest-pinned Arch environment against PipeWire 1.6.8, `libspa-0.2`, GTK
   4.22.4, and gtk4-layer-shell 1.3.0.
-- Hosted verification remains pending for this landing.
+- GitHub Actions run 33344660172 passed commit `88e7fb3`.
 
 ### Next
 

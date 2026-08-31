@@ -533,6 +533,20 @@ pub fn parse_event_line(line: &str) -> Result<Option<HyprlandEvent>, ParseError>
             "1" => Ok(Some(HyprlandEvent::FullscreenChanged(true))),
             _ => Err(ParseError::MalformedEvent),
         },
+        "screencastv2" => {
+            let mut fields = data.splitn(3, ',');
+            let state = required_field(&mut fields)?;
+            let owner = required_field(&mut fields)?;
+            let _name = fields.next().ok_or(ParseError::MalformedEvent)?;
+            if !matches!(owner, "monitor" | "window" | "region") {
+                return Err(ParseError::MalformedEvent);
+            }
+            match state {
+                "0" => Ok(Some(HyprlandEvent::ScreencastChanged(false))),
+                "1" => Ok(Some(HyprlandEvent::ScreencastChanged(true))),
+                _ => Err(ParseError::MalformedEvent),
+            }
+        }
         "createworkspacev2" => {
             let (id, name) = two_fields(data)?;
             let id = parse_workspace_id(id)?;
@@ -568,7 +582,7 @@ pub fn parse_event_line(line: &str) -> Result<Option<HyprlandEvent>, ParseError>
         | "renameworkspace" | "configreloaded" | "activespecial" | "activespecialv2" | "kill" => {
             Ok(Some(HyprlandEvent::ResnapshotRequired))
         }
-        "workspace" | "focusedmon" | "movewindow" | "windowtitle" => Ok(None),
+        "workspace" | "focusedmon" | "movewindow" | "windowtitle" | "screencast" => Ok(None),
         _ => Ok(None),
     }
 }
