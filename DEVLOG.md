@@ -6,6 +6,61 @@ or unmeasured. Planned work is never presented as implemented behavior.
 
 ---
 
+## 2026-08-31 - Add WirePlumber-cooperating active-stream movement
+
+The audio adapter can now move the active playback stream to a chosen sink by
+cooperating with WirePlumber instead of mutating graph links. A move writes the
+`target.object` key of the `default` metadata with the stream's registry
+identity as the subject and the destination sink's decimal `object.serial` as a
+`Spa:Id` value, the metadata channel WirePlumber watches for stream targets. A
+successful write acknowledges only that a request was sent; it never asserts the
+graph moved, because WirePlumber owns the relink.
+
+The typed `MoveStream` command is now gated by a deterministic movable-stream
+selection instead of being an unconditional transport limitation. The transport
+keeps a bounded, numeric inventory of playback streams whose `media.class`
+equals `Stream/Output/Audio` exactly after trimming, so a decorated or
+near-match class is never tracked. Each entry is keyed by registry identity and
+retains only a running flag, a movable flag derived from `node.dont-move`, and
+whether the stream subject grants the metadata (`PW_PERM_M`) permission a
+`target.object` write on that subject requires. No application, media, or
+process identity crosses the boundary. Exactly one running, movable,
+metadata-permitted stream is the active subject; zero is unavailable; more than
+one is ambiguous; and an inventory overflow, an explicit
+`linking.allow-moving-streams` denial in the `sm-settings` metadata, or a
+`default` metadata object lacking write and execute permission disables the
+action. A running movable stream whose subject lacks the metadata permission is
+not counted rather than offered. The root projects this selection through a new
+capability update and clears it on reconnect and loss so a stale subject cannot
+validate a move to a vanished stream.
+
+Because opaque registry IDs are reused across a PipeWire reconnect or service
+restart, every connection attempt is stamped with a monotonic generation. The
+generation rides inside the published selection, is adopted by the validated
+adapter command, and is rechecked at dispatch; the transport also re-derives the full
+selection preconditions there. A move queued against a stale connection fails
+the generation recheck instead of retargeting a coincidentally matching new
+stream or sink, and a move against an ambiguous or disabled graph is refused.
+
+To hold both the always-compiled pure model and the feature-gated transport
+under the file-size limits, the adapter moved from a single `services/audio.rs`
+file to a `services/audio/` module: `mod.rs` carries the pure state, selection,
+policy, permission, and metadata-value logic, and `transport.rs` carries the
+supervised PipeWire loop. Behavior of the split modules is unchanged from the
+prior single file.
+
+Verified on the host and in the digest-pinned Arch container with Rust 1.96.0,
+GTK 4.22.4, GTK4 Layer Shell 1.3.0, PipeWire 1.6.8, and SPA 0.2. The default
+gate passes formatting, Clippy with warnings denied, 99 library tests with one
+live-logind test ignored, all integration tests, documentation, file-size and
+dependency topology checks, RustSec across 172 dependencies, and public-safety.
+The `audio-transport` feature passes Clippy with warnings denied, 100 library
+tests with the same live-logind test ignored, all integration tests including
+the 10 Phase 5 contracts, and documentation. The live relink against a running
+WirePlumber, whether streams reach the running state, and the `object.serial`
+and permission values a real server reports remain unmeasured in this headless
+environment; the bindings are validated at compile time only.
+
 ## 2026-08-31 - Add positive PipeWire microphone and camera capture evidence
 
 A bounded capture-evidence graph now derives positive microphone and camera
@@ -112,9 +167,10 @@ longer exists. The single-bind and clear-on-removal decisions are pure,
 transport-independent functions with their own unit tests.
 
 The root capability gate now rejects a default-route request to an unavailable
-node or a node of the wrong direction before dispatch. Per-stream movement
-remains an explicit transport limitation: it targets a stream node this
-endpoint-only model does not represent, and its native contract is unverified.
+node or a node of the wrong direction before dispatch. At this landing,
+per-stream movement remained an explicit transport limitation: it targeted a
+stream node this endpoint-only model did not represent, and its native contract
+was unverified.
 
 ### Verification
 
@@ -271,9 +327,9 @@ remain buffered until PipeWire Core sync completes and one bounded initial
 snapshot is published; only then does the adapter publish deltas and reset its
 bounded exponential reconnect backoff. Cancellation remains owned. No `wpctl`
 subprocess is polled, no `wireplumber` crate is linked, and the project contains
-no `unsafe` code. Default and stream routing through the WirePlumber-owned
-policy metadata is reported as a transport limitation pending native verification
-rather than claimed as complete.
+no `unsafe` code. At this landing, default and stream routing through the
+WirePlumber-owned policy metadata was reported as a transport limitation pending
+native verification rather than claimed as complete.
 
 The optional `pipewire` dependency and the adapter compile only behind a new
 `audio-transport` Cargo feature. The pure domain, typed contracts, and SPA pod

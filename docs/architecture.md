@@ -189,11 +189,38 @@ Weftwise never writes the runtime `default.audio.*` output key directly. The
 selection is capability-gated to an available node of the requested direction,
 and the metadata key and JSON value builders are verified by unit tests; the
 live metadata round-trip against a running WirePlumber remains unmeasured here.
-Per-stream movement targets a stream node this endpoint-only model does not yet
-represent and stays an explicit transport limitation until its native contract
-is verified. The adapter and its optional `pipewire` dependency compile only
-with the `audio-transport` feature; the pure domain and typed contracts build
-without it.
+
+Moving the active playback stream to a chosen sink also cooperates with
+WirePlumber rather than mutating links. The transport keeps a bounded, numeric
+inventory of playback streams whose `media.class` equals `Stream/Output/Audio`
+exactly after trimming, so a decorated or near-match class is never tracked as a
+movable stream. Each entry is keyed by registry identity and retains only a
+running flag, a movable flag derived from `node.dont-move`, and whether the
+stream subject grants the metadata (`PW_PERM_M`) permission a `target.object`
+write requires; no application, media, or process identity is kept. Selection is
+deterministic: exactly one running, movable, metadata-permitted stream is the
+active subject, zero is unavailable, more than one is ambiguous, and an
+inventory overflow, an explicit `linking.allow-moving-streams` denial in the
+`sm-settings` metadata, or a `default` metadata object without write and execute
+permission disables the action. A running movable stream whose subject lacks the
+metadata permission cannot be moved, so it is not counted rather than offered.
+Only the active state offers a move. A move writes the `target.object` key of
+the `default` metadata with the stream's identity as the subject and the
+destination sink's decimal `object.serial` as a `Spa:Id` value; WirePlumber owns
+the resulting relink, so a successful write acknowledges only that a request was
+sent and never asserts the graph moved. Because opaque registry IDs are reused
+across a PipeWire reconnect or service restart, every connection attempt is
+stamped with a monotonic generation carried inside the published selection and
+back through the validated move command; a move queued against a stale
+connection fails the generation recheck at dispatch instead of retargeting a coincidentally matching
+new stream or sink. The selection rules, exact class match, subject and metadata
+permission gates, tri-state policy parsing, generation freshness check, and
+target value builder are verified by unit tests; the live relink against a
+running WirePlumber remains unmeasured here. The adapter and its optional
+`pipewire` dependency compile only with the
+`audio-transport` feature; the pure domain and typed contracts build without it.
+The transport for this adapter lives in a dedicated `audio/transport.rs` module
+so the always-compiled pure model stays well under the file-size limits.
 
 ## Temporary feedback
 

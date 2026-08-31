@@ -8,9 +8,13 @@
 //! and forwards typed updates back out, so no `wpctl` subprocess is polled.
 //!
 //! WirePlumber remains the session policy owner. The adapter reads its standard
-//! PipeWire `default` metadata for current sink and source selection; route
-//! mutation remains an explicit transport limitation. This crate adds no
-//! `wireplumber` dependency and contains no `unsafe` project code.
+//! PipeWire `default` metadata for current sink and source selection and
+//! cooperates with WirePlumber for route mutation by writing its `default`
+//! metadata rather than mutating links: default-node selection writes
+//! `default.configured.audio.{sink,source}`, and active-stream movement writes
+//! the stream's `target.object` key. Every such write only requests a change;
+//! WirePlumber owns the resulting relink and republishes the outcome. This
+//! crate adds no `wireplumber` dependency and contains no `unsafe` project code.
 //!
 //! The transport adapter and pod codec compile only with the `audio-transport`
 //! feature, which enables the optional `pipewire` dependency. Native runtime
@@ -175,6 +179,261 @@ impl AudioNode {
     }
 }
 
+/// Per-connection generation token.
+///
+/// Every PipeWire connection attempt is stamped with a fresh, monotonically
+/// increasing generation. Because opaque registry global IDs are reused across
+/// a PipeWire reconnect or service restart, the generation distinguishes a
+/// stream or sink observed on the current connection from an identically
+/// numbered object observed on a previous one. It rides inside the published
+/// movable-stream selection and back through the validated move command so a move request
+/// queued against a stale connection is rejected instead of retargeting a
+/// coincidentally matching new object.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct Generation(u64);
+
+impl Generation {
+    /// Wrap a connection generation counter value.
+    #[must_use]
+    pub const fn new(value: u64) -> Self {
+        Self(value)
+    }
+
+    /// The underlying generation counter value.
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
+
+/// Whether a move command's generation still matches the live connection.
+///
+/// A queued move built against connection `command` must be rejected once the
+/// adapter has reconnected to a newer `current` generation, because the stream
+/// and sink IDs it names may now identify different objects.
+#[must_use]
+pub const fn move_is_fresh(command: Generation, current: Generation) -> bool {
+    command.get() == current.get()
+}
+
+/// Maximum movable playback streams retained from an untrusted server.
+pub const MAX_MOVABLE_STREAMS: usize = 64;
+
+/// The exact `media.class` of a movable audio playback stream.
+pub const MOVABLE_STREAM_MEDIA_CLASS: &str = "Stream/Output/Audio";
+
+/// Whether a `media.class` names a movable audio playback stream.
+///
+/// The comparison is exact after trimming surrounding whitespace: a decorated
+/// or near-match class such as `Stream/Output/Audio/Virtual`,
+/// `Stream/Output/Audiofoo`, or `Stream/Output/Video` is rejected, so an
+/// unrelated node can never be tracked as a movable stream.
+#[must_use]
+pub fn is_movable_stream_class(class: &str) -> bool {
+    class.trim() == MOVABLE_STREAM_MEDIA_CLASS
+}
+
+/// Selection status of the single movable playback stream.
+///
+/// Stream movement targets exactly one running, movable playback stream. Zero
+/// running movable streams is [`Unavailable`](MovableStreamState::Unavailable);
+/// more than one is [`Ambiguous`](MovableStreamState::Ambiguous) because there
+/// is no unique subject; a bounded-inventory overflow, an explicit session
+/// policy denial, or a metadata object without write and execute permission is
+/// [`Disabled`](MovableStreamState::Disabled). Only
+/// [`Active`](MovableStreamState::Active) offers the move action, and even then
+/// a successful write acknowledges only that a request was sent.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum MovableStreamState {
+    /// No running movable playback stream exists; the action is unavailable.
+    #[default]
+    Unavailable,
+    /// Exactly one running movable playback stream; it is the move subject.
+    ///
+    /// Carries the connection generation the selection was observed on so a
+    /// move built against it can be rejected after a reconnect.
+    Active {
+        /// Opaque global identity of the uniquely movable stream.
+        stream: AudioNodeId,
+        /// Connection generation this selection was observed on.
+        generation: Generation,
+    },
+    /// More than one running movable stream; no unique subject exists.
+    Ambiguous,
+    /// Movement is disabled by overflow, session policy, or permission.
+    Disabled,
+}
+
+impl MovableStreamState {
+    /// The uniquely movable stream identity, when exactly one exists.
+    #[must_use]
+    pub const fn active(self) -> Option<AudioNodeId> {
+        match self {
+            Self::Active { stream, .. } => Some(stream),
+            _ => None,
+        }
+    }
+
+    /// The uniquely movable stream identity with its connection generation.
+    #[must_use]
+    pub const fn active_generation(self) -> Option<(AudioNodeId, Generation)> {
+        match self {
+            Self::Active { stream, generation } => Some((stream, generation)),
+            _ => None,
+        }
+    }
+
+    /// Whether a move action can currently be offered.
+    #[must_use]
+    pub const fn can_move(self) -> bool {
+        matches!(self, Self::Active { .. })
+    }
+}
+
+/// A bounded, sanitized movable-stream candidate for pure selection.
+///
+/// Only numeric identity and three booleans are retained; no application name,
+/// process identity, or media metadata crosses this boundary.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MovableStreamCandidate {
+    /// Opaque PipeWire global identity of the stream node.
+    pub id: AudioNodeId,
+    /// Whether the stream node is in the running state.
+    pub running: bool,
+    /// Whether the stream permits movement (not `node.dont-move`).
+    pub movable: bool,
+    /// Whether the stream object grants the metadata permission a
+    /// `target.object` write on this subject requires (`PW_PERM_M`).
+    pub has_metadata_permission: bool,
+}
+
+/// Session-policy and permission preconditions for offering stream movement.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct MoveEnablement {
+    /// The session policy does not explicitly deny moving streams.
+    pub policy_allows: bool,
+    /// The bound `default` metadata object permits writing a foreign subject.
+    pub metadata_writable: bool,
+    /// The bounded stream inventory overflowed and cannot be trusted.
+    pub overflowed: bool,
+}
+
+/// Tri-state resolution of the `sm-settings` `linking.allow-moving-streams`.
+///
+/// The setting is frequently absent because the WirePlumber default is not
+/// republished. [`Unknown`](MoveMovingPolicy::Unknown) is therefore treated as
+/// permitting an attempt rather than a claim of capability: the move action only
+/// ever sends a request and never asserts the graph moved. Only an explicit
+/// [`Denied`](MoveMovingPolicy::Denied) disables the action.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum MoveMovingPolicy {
+    /// The setting was not observed.
+    #[default]
+    Unknown,
+    /// Moving streams is explicitly allowed.
+    Allowed,
+    /// Moving streams is explicitly denied.
+    Denied,
+}
+
+impl MoveMovingPolicy {
+    /// Whether this policy permits attempting a move (anything but denial).
+    #[must_use]
+    pub const fn permits_attempt(self) -> bool {
+        !matches!(self, Self::Denied)
+    }
+}
+
+/// Resolve the `linking.allow-moving-streams` setting value into tri-state.
+///
+/// Accepts the canonical boolean spellings WirePlumber writes; any other or
+/// absent value is [`Unknown`](MoveMovingPolicy::Unknown).
+#[must_use]
+pub fn parse_allow_moving_streams(value: Option<&str>) -> MoveMovingPolicy {
+    match value.map(str::trim) {
+        Some("true" | "1") => MoveMovingPolicy::Allowed,
+        Some("false" | "0") => MoveMovingPolicy::Denied,
+        _ => MoveMovingPolicy::Unknown,
+    }
+}
+
+/// Select the movable-stream state from bounded candidates and enablement.
+///
+/// Overflow, policy denial, or a non-writable metadata object disables the
+/// action outright. Otherwise the running, movable candidates that also grant
+/// the subject metadata permission decide: exactly one is
+/// [`Active`](MovableStreamState::Active) (stamped with `generation`), several
+/// are [`Ambiguous`](MovableStreamState::Ambiguous), and none is
+/// [`Unavailable`](MovableStreamState::Unavailable). A running movable stream
+/// that lacks the subject permission cannot be moved, so it is not counted.
+#[must_use]
+pub fn select_movable_stream(
+    candidates: &[MovableStreamCandidate],
+    enablement: MoveEnablement,
+    generation: Generation,
+) -> MovableStreamState {
+    if enablement.overflowed || !enablement.policy_allows || !enablement.metadata_writable {
+        return MovableStreamState::Disabled;
+    }
+    let mut eligible = candidates
+        .iter()
+        .filter(|c| c.running && c.movable && c.has_metadata_permission);
+    match (eligible.next(), eligible.next()) {
+        (Some(one), None) => MovableStreamState::Active {
+            stream: one.id,
+            generation,
+        },
+        (Some(_), Some(_)) => MovableStreamState::Ambiguous,
+        (None, _) => MovableStreamState::Unavailable,
+    }
+}
+
+/// PipeWire permission bit granting property writes on an object.
+pub const PW_PERM_W: u32 = 0o200;
+/// PipeWire permission bit granting method invocation on an object.
+pub const PW_PERM_X: u32 = 0o100;
+/// PipeWire permission bit granting metadata assignment on an object.
+pub const PW_PERM_M: u32 = 0o010;
+
+/// Whether a stream subject grants the metadata permission a `target.object`
+/// write requires.
+///
+/// Writing `target.object` names the stream node as the metadata *subject*.
+/// The server only accepts that assignment when the client holds the metadata
+/// (`PW_PERM_M`) permission on the subject object, so a stream without it is
+/// not offered as a move subject rather than presented as if it could move.
+#[must_use]
+pub const fn subject_permits_metadata(permissions: u32) -> bool {
+    permissions & PW_PERM_M != 0
+}
+
+/// Whether the bound `default` metadata permissions allow a foreign-subject
+/// write.
+///
+/// Writing `target.object` for another node's subject invokes `set_property`
+/// on the metadata object, which requires both write and execute permission.
+/// Without both, the move request would be silently rejected by the server, so
+/// the action is disabled rather than presented as if it could succeed.
+#[must_use]
+pub const fn metadata_permits_target_write(permissions: u32) -> bool {
+    permissions & PW_PERM_W != 0 && permissions & PW_PERM_X != 0
+}
+
+/// The `default` metadata key WirePlumber watches to move a stream's target.
+pub const TARGET_OBJECT_METADATA_KEY: &str = "target.object";
+/// SPA metadata value type for [`TARGET_OBJECT_METADATA_KEY`]: an object id.
+pub const TARGET_OBJECT_METADATA_TYPE: &str = "Spa:Id";
+
+/// Build the `target.object` metadata value: the sink's decimal object serial.
+///
+/// WirePlumber matches the numeric `object.serial` of the destination sink, not
+/// its registry id, so the stream follows the intended device across
+/// re-enumeration. The value is a plain decimal string with no interpolation.
+#[must_use]
+pub fn target_object_metadata_value(object_serial: u64) -> String {
+    object_serial.to_string()
+}
+
 /// Root-owned PipeWire audio domain state.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct AudioState {
@@ -183,6 +442,7 @@ pub struct AudioState {
     nodes: BTreeMap<AudioNodeId, AudioNode>,
     default_sink: Option<AudioNodeId>,
     default_source: Option<AudioNodeId>,
+    movable_stream: MovableStreamState,
 }
 
 impl AudioState {
@@ -233,6 +493,17 @@ impl AudioState {
             AudioDirection::Sink => self.default_sink = resolved,
             AudioDirection::Source => self.default_source = resolved,
         }
+    }
+
+    /// Replace the movable-stream selection projected from the adapter.
+    pub fn set_movable_stream(&mut self, state: MovableStreamState) {
+        self.movable_stream = state;
+    }
+
+    /// The current movable-stream selection state.
+    #[must_use]
+    pub fn movable_stream(&self) -> MovableStreamState {
+        self.movable_stream
     }
 
     /// Mark retained state stale while a fresh connection is acquired.
@@ -312,15 +583,64 @@ impl AudioState {
                 }
                 ok(kind)
             }
+            // The public request carries no generation; validation binds it to
+            // the current selection's generation, producing the adapter command.
             AudioCommandKind::MoveStream { stream, target } => {
-                self.require_node(stream)?;
-                let target_node = self.require_node(target)?;
-                if target_node.direction != AudioDirection::Sink {
-                    return Err(AudioCommandError::WrongDirection);
-                }
-                Err(AudioCommandError::Unsupported)
+                self.validate_move(stream, target, None)
             }
+            // A pre-generationed adapter command is re-validated against the
+            // current selection, and its generation must still match.
+            AudioCommandKind::MoveStreamTo {
+                stream,
+                target,
+                generation,
+            } => self.validate_move(stream, target, Some(generation)),
         }
+    }
+
+    /// Validate a stream move and bind it to the current connection generation.
+    ///
+    /// `required_generation` is `None` for a fresh public request (the current
+    /// selection's generation is adopted) and `Some(g)` when re-validating an
+    /// already-stamped adapter command (the generation must still match, so a
+    /// move queued against a stale connection is rejected).
+    fn validate_move(
+        &self,
+        stream: AudioNodeId,
+        target: AudioNodeId,
+        required_generation: Option<Generation>,
+    ) -> Result<AudioCommand, AudioCommandError> {
+        // The target must be a currently routable sink endpoint.
+        let target_node = self.require_node(target)?;
+        if target_node.direction != AudioDirection::Sink {
+            return Err(AudioCommandError::WrongDirection);
+        }
+        if !target_node.available {
+            return Err(AudioCommandError::Unsupported);
+        }
+        // The stream identity is not an endpoint in this model; it must match
+        // the single active movable stream the adapter selected. Zero,
+        // ambiguous, or disabled movement is not a supported move.
+        let (active, generation) = self
+            .movable_stream
+            .active_generation()
+            .ok_or(AudioCommandError::Unsupported)?;
+        if active != stream {
+            return Err(AudioCommandError::Unsupported);
+        }
+        // A re-validated command must still target the live generation.
+        if let Some(required) = required_generation
+            && !move_is_fresh(required, generation)
+        {
+            return Err(AudioCommandError::Unsupported);
+        }
+        Ok(AudioCommand {
+            kind: AudioCommandKind::MoveStreamTo {
+                stream,
+                target,
+                generation,
+            },
+        })
     }
 
     fn require_node(&self, id: AudioNodeId) -> Result<&AudioNode, AudioCommandError> {
@@ -391,6 +711,13 @@ pub enum AudioUpdate {
         /// Adapter-relative observation time.
         observed_millis: u64,
     },
+    /// The movable playback stream selection changed.
+    MovableStreamChanged {
+        /// Resolved movable-stream selection.
+        state: MovableStreamState,
+        /// Adapter-relative observation time.
+        observed_millis: u64,
+    },
     /// The PipeWire connection is unavailable; retained state is stale.
     Unavailable,
 }
@@ -431,12 +758,35 @@ pub enum AudioCommandKind {
         /// Requested default node.
         id: AudioNodeId,
     },
-    /// Move a stream node to a target sink.
+    /// Move the active playback stream to a target sink.
+    ///
+    /// `stream` must equal the single active movable stream the adapter
+    /// currently reports through [`MovableStreamState::Active`]; the caller
+    /// reads it from state rather than nominating an arbitrary node. The move
+    /// cooperates with WirePlumber through `target.object` metadata and only
+    /// ever acknowledges that a request was sent.
     MoveStream {
-        /// Stream node to move.
+        /// The active movable stream to move.
         stream: AudioNodeId,
         /// Destination sink node.
         target: AudioNodeId,
+    },
+    /// Adapter-internal generation-stamped form of [`MoveStream`].
+    ///
+    /// Produced only by [`AudioState::validate`]; never constructed by callers.
+    /// The `generation` binds the request to the connection whose selection
+    /// authorized it, so the transport can reject a move queued across a
+    /// reconnect where the stream and sink IDs may now identify different
+    /// objects.
+    ///
+    /// [`MoveStream`]: AudioCommandKind::MoveStream
+    MoveStreamTo {
+        /// The active movable stream to move.
+        stream: AudioNodeId,
+        /// Destination sink node.
+        target: AudioNodeId,
+        /// Connection generation the authorizing selection was observed on.
+        generation: Generation,
     },
 }
 
@@ -633,760 +983,7 @@ pub fn parse_props_pod(bytes: &[u8]) -> Option<ParsedProps> {
 pub use transport::{command_channel, run};
 
 #[cfg(feature = "audio-transport")]
-mod transport {
-    use std::cell::{Cell, RefCell};
-    use std::collections::HashMap;
-    use std::rc::Rc;
-    use std::sync::Arc;
-    use std::time::Instant;
-
-    use pipewire::context::ContextRc;
-    use pipewire::main_loop::MainLoopRc;
-    use pipewire::metadata::Metadata;
-    use pipewire::registry::{GlobalObject, RegistryRc};
-    use pipewire::spa::param::ParamType;
-    use pipewire::spa::pod::Pod;
-    use pipewire::spa::utils::dict::DictRef;
-    use pipewire::types::ObjectType;
-    use tokio::sync::mpsc;
-
-    use super::{
-        AudioCapabilities, AudioCommand, AudioCommandError, AudioCommandKind, AudioCommandOutcome,
-        AudioDirection, AudioNode, AudioNodeId, AudioUpdate, AudioVolume, DEFAULT_METADATA_TYPE,
-        MAX_AUDIO_NAME_CHARACTERS, MAX_AUDIO_NODES, build_props_pod, default_metadata_key,
-        default_metadata_value, parse_props_pod, should_bind_default_metadata,
-        should_clear_default_metadata,
-    };
-    use crate::services::capture::{
-        CaptureKind, CaptureObservation, CaptureTracker, PublishCapture, capture_loss_state,
-    };
-    use crate::supervisor::{Cancellation, ReconnectBackoff};
-
-    /// The bound `default` metadata proxy retained for route mutation.
-    ///
-    /// Keyed by the registry global ID so a `global_remove` for that object can
-    /// release the proxy and let a recreated one rebind, instead of writing
-    /// through a stale handle. The property listener is retained alongside the
-    /// proxy so both drop together when the handle is cleared.
-    struct DefaultMetadataHandle {
-        global_id: u32,
-        proxy: Metadata,
-        _listener: pipewire::metadata::MetadataListener,
-    }
-
-    /// Shared slot for the single bound `default` metadata handle.
-    type DefaultMetadata = Rc<RefCell<Option<DefaultMetadataHandle>>>;
-
-    type Publish = Arc<dyn Fn(AudioUpdate) + Send + Sync + 'static>;
-
-    /// Create the bounded command channel owned by the root and adapter.
-    #[must_use]
-    pub fn command_channel() -> (mpsc::Sender<AudioCommand>, mpsc::Receiver<AudioCommand>) {
-        mpsc::channel(super::COMMAND_CAPACITY)
-    }
-
-    /// Control messages delivered into the PipeWire loop thread.
-    enum Control {
-        Command(AudioCommand),
-        Quit,
-    }
-
-    /// Run the supervised PipeWire adapter, reconnecting until cancellation.
-    pub async fn run(
-        publish: impl Fn(AudioUpdate) + Send + Sync + 'static,
-        publish_capture: impl Fn(CaptureObservation) + Send + Sync + 'static,
-        mut commands: mpsc::Receiver<AudioCommand>,
-        mut cancellation: Cancellation,
-    ) {
-        let publish: Publish = Arc::new(publish);
-        let capture_publish: PublishCapture = Arc::new(publish_capture);
-        let capture_started = Instant::now();
-        // Capture observability is declared up front, like the other positive
-        // privacy adapters, so a pre-trust loss can surface as uncertainty.
-        for kind in CaptureKind::ALL {
-            (capture_publish)(CaptureObservation::supported(
-                kind,
-                true,
-                elapsed_millis(capture_started),
-            ));
-        }
-        let mut backoff = ReconnectBackoff::default();
-        loop {
-            (publish)(AudioUpdate::Connecting);
-            // Attempt trust is reset every reconnect. It becomes true only when
-            // the capture second barrier reports a trusted (complete) graph, so a
-            // failure before that barrier is published as `Unavailable`, never a
-            // false `Stale`.
-            let mut capture_trusted = false;
-            let (control_tx, control_rx) = pipewire::channel::channel::<Control>();
-            let (done_tx, mut done_rx) = mpsc::unbounded_channel::<()>();
-            let (ready_tx, mut ready_rx) = mpsc::unbounded_channel::<()>();
-            let (capture_ready_tx, mut capture_ready_rx) = mpsc::unbounded_channel::<bool>();
-            let thread_publish = Arc::clone(&publish);
-            let thread_capture = Arc::clone(&capture_publish);
-            let handle = std::thread::Builder::new()
-                .name("weftwise-pipewire".to_owned())
-                .spawn(move || {
-                    thread_main(
-                        thread_publish,
-                        thread_capture,
-                        control_rx,
-                        ready_tx,
-                        capture_ready_tx,
-                    );
-                    let _ = done_tx.send(());
-                });
-            let Ok(handle) = handle else {
-                (publish)(AudioUpdate::Unavailable);
-                publish_capture_loss(&capture_publish, capture_trusted, capture_started);
-                let delay = backoff.next_delay();
-                tokio::select! {
-                    _ = cancellation.cancelled() => return,
-                    _ = tokio::time::sleep(delay) => {}
-                }
-                continue;
-            };
-
-            let mut ready = false;
-            loop {
-                tokio::select! {
-                    _ = cancellation.cancelled() => {
-                        let _ = control_tx.send(Control::Quit);
-                        break;
-                    }
-                    _ = done_rx.recv() => break,
-                    initial_sync = ready_rx.recv(), if !ready => {
-                        ready = true;
-                        if initial_sync.is_some() {
-                            backoff.reset();
-                        }
-                    }
-                    trusted = capture_ready_rx.recv() => {
-                        if let Some(trusted) = trusted {
-                            // Trust for this attempt is driven only by the capture
-                            // second barrier, not the audio first barrier.
-                            capture_trusted = trusted;
-                        }
-                    }
-                    command = commands.recv() => {
-                        match command {
-                            Some(command) => {
-                                if control_tx.send(Control::Command(command)).is_err() {
-                                    break;
-                                }
-                            }
-                            None => {
-                                let _ = control_tx.send(Control::Quit);
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-
-            let _ = handle.join();
-            if cancellation.is_cancelled() {
-                return;
-            }
-            (publish)(AudioUpdate::Unavailable);
-            publish_capture_loss(&capture_publish, capture_trusted, capture_started);
-            let delay = backoff.next_delay();
-            tokio::select! {
-                _ = cancellation.cancelled() => return,
-                _ = tokio::time::sleep(delay) => {}
-            }
-        }
-    }
-
-    /// Publish capture loss for every source without degrading other privacy
-    /// sources: `Stale` once the attempt reached a complete trusted snapshot,
-    /// `Unavailable` before. Never `Inactive`.
-    fn publish_capture_loss(
-        capture_publish: &PublishCapture,
-        capture_trusted: bool,
-        capture_started: Instant,
-    ) {
-        let state = capture_loss_state(capture_trusted);
-        for kind in CaptureKind::ALL {
-            (capture_publish)(CaptureObservation::observed(
-                kind,
-                state,
-                elapsed_millis(capture_started),
-            ));
-        }
-    }
-
-    struct NodeEntry {
-        node: AudioNode,
-        name: String,
-        proxy: pipewire::node::Node,
-        _listener: pipewire::node::NodeListener,
-    }
-
-    #[derive(Default)]
-    struct Defaults {
-        sink_name: Option<String>,
-        source_name: Option<String>,
-    }
-
-    type Nodes = Rc<RefCell<HashMap<u32, NodeEntry>>>;
-
-    fn thread_main(
-        publish: Publish,
-        capture_publish: PublishCapture,
-        control_rx: pipewire::channel::Receiver<Control>,
-        ready_tx: mpsc::UnboundedSender<()>,
-        capture_ready_tx: mpsc::UnboundedSender<bool>,
-    ) {
-        pipewire::init();
-        let Ok(main_loop) = MainLoopRc::new(None) else {
-            return;
-        };
-        let Ok(context) = ContextRc::new(&main_loop, None) else {
-            return;
-        };
-        let Ok(core) = context.connect_rc(None) else {
-            return;
-        };
-        let Ok(registry) = core.get_registry_rc() else {
-            return;
-        };
-
-        let nodes: Nodes = Rc::new(RefCell::new(HashMap::new()));
-        let defaults = Rc::new(RefCell::new(Defaults::default()));
-        let synced = Rc::new(Cell::new(false));
-        let default_metadata: DefaultMetadata = Rc::new(RefCell::new(None));
-        let started = Instant::now();
-        // The capture tracker shares this loop's registry and clock and drives
-        // microphone and camera evidence off the same globals as audio nodes.
-        let capture = CaptureTracker::new(Arc::clone(&capture_publish), started);
-
-        let quit_loop = main_loop.clone();
-        let command_nodes = Rc::clone(&nodes);
-        let command_metadata = Rc::clone(&default_metadata);
-        let command_publish = Arc::clone(&publish);
-        let _control = control_rx.attach(main_loop.loop_(), move |control| match control {
-            Control::Quit => quit_loop.quit(),
-            Control::Command(command) => {
-                apply_command(
-                    &command_nodes,
-                    &command_metadata,
-                    &command,
-                    &command_publish,
-                    started,
-                );
-            }
-        });
-
-        let registry_for_cb = registry.clone();
-        let global_nodes = Rc::clone(&nodes);
-        let global_defaults = Rc::clone(&defaults);
-        let global_synced = Rc::clone(&synced);
-        let global_metadata = Rc::clone(&default_metadata);
-        let global_publish = Arc::clone(&publish);
-        let global_capture = Rc::clone(&capture);
-        let global_capture_registry = registry.clone();
-        let remove_nodes = Rc::clone(&nodes);
-        let remove_synced = Rc::clone(&synced);
-        let remove_publish = Arc::clone(&publish);
-        let remove_metadata = Rc::clone(&default_metadata);
-        let remove_capture = Rc::clone(&capture);
-        let _registry_listener = registry
-            .add_listener_local()
-            .global(move |global| {
-                on_global(
-                    &registry_for_cb,
-                    &global_nodes,
-                    &global_defaults,
-                    &global_synced,
-                    &global_metadata,
-                    &global_publish,
-                    started,
-                    global,
-                );
-                CaptureTracker::observe_global(&global_capture, &global_capture_registry, global);
-            })
-            .global_remove(move |id| {
-                let current_id = remove_metadata
-                    .borrow()
-                    .as_ref()
-                    .map(|handle| handle.global_id);
-                if should_clear_default_metadata(current_id, id) {
-                    // Release the stale proxy and listener so a recreated
-                    // `default` metadata object can rebind on its next global.
-                    *remove_metadata.borrow_mut() = None;
-                }
-                if remove_nodes.borrow_mut().remove(&id).is_some() && remove_synced.get() {
-                    (remove_publish)(AudioUpdate::NodeRemoved {
-                        id: AudioNodeId::new(id),
-                        observed_millis: elapsed_millis(started),
-                    });
-                }
-                CaptureTracker::observe_remove(&remove_capture, id);
-            })
-            .register();
-
-        let Ok(pending) = core.sync(0) else {
-            return;
-        };
-        let sync_nodes = Rc::clone(&nodes);
-        let sync_defaults = Rc::clone(&defaults);
-        let sync_synced = Rc::clone(&synced);
-        let sync_publish = Arc::clone(&publish);
-        let sync_capture = Rc::clone(&capture);
-        // The capture graph uses a second readiness barrier. The first sync
-        // establishes registry enumeration and drives the audio snapshot and
-        // audio ready signal, preserving audio snapshot ordering. Binding each
-        // capture node and link during enumeration requests its info; the second
-        // sync flushes those info replies, and only its completion trusts the
-        // capture graph so a Node/Link running/active reply cannot land after
-        // trust.
-        let capture_pending: Rc<Cell<Option<pipewire::spa::utils::result::AsyncSeq>>> =
-            Rc::new(Cell::new(None));
-        let sync_core = core.clone();
-        let error_loop = main_loop.clone();
-        let _core_listener = core
-            .add_listener_local()
-            .done(move |id, sequence| {
-                if id != pipewire::core::PW_ID_CORE {
-                    return;
-                }
-                if !sync_synced.get() && sequence == pending {
-                    sync_synced.set(true);
-                    publish_snapshot(&sync_nodes, &sync_defaults, &sync_publish, started);
-                    let _ = ready_tx.send(());
-                    // Issue the second sync only after the audio snapshot; its
-                    // completion marks the capture graph ready. If the second
-                    // sync cannot be issued, the barrier fails: publish pre-trust
-                    // uncertainty and report untrusted so a loss stays Unavailable.
-                    match sync_core.sync(0) {
-                        Ok(second) => capture_pending.set(Some(second)),
-                        Err(_) => {
-                            let trusted = CaptureTracker::finish_barrier(&sync_capture, false);
-                            let _ = capture_ready_tx.send(trusted);
-                        }
-                    }
-                    return;
-                }
-                if capture_pending.get() == Some(sequence) {
-                    capture_pending.set(None);
-                    let trusted = CaptureTracker::finish_barrier(&sync_capture, true);
-                    let _ = capture_ready_tx.send(trusted);
-                }
-            })
-            .error(move |id, _sequence, _result, _message| {
-                if id == pipewire::core::PW_ID_CORE {
-                    error_loop.quit();
-                }
-            })
-            .register();
-
-        main_loop.run();
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn on_global(
-        registry: &RegistryRc,
-        nodes: &Nodes,
-        defaults: &Rc<RefCell<Defaults>>,
-        synced: &Rc<Cell<bool>>,
-        metadata: &DefaultMetadata,
-        publish: &Publish,
-        started: Instant,
-        global: &GlobalObject<&DictRef>,
-    ) {
-        match global.type_ {
-            ObjectType::Node => {
-                on_node_global(registry, nodes, defaults, synced, publish, started, global)
-            }
-            ObjectType::Metadata => on_metadata_global(
-                registry, nodes, defaults, synced, metadata, publish, started, global,
-            ),
-            _ => {}
-        }
-    }
-
-    fn on_node_global(
-        registry: &RegistryRc,
-        nodes: &Nodes,
-        defaults: &Rc<RefCell<Defaults>>,
-        synced: &Rc<Cell<bool>>,
-        publish: &Publish,
-        started: Instant,
-        global: &GlobalObject<&DictRef>,
-    ) {
-        let Some(props) = global.props else {
-            return;
-        };
-        let Some(direction) = audio_direction(props) else {
-            return;
-        };
-        let id = global.id;
-        if nodes.borrow().len() >= MAX_AUDIO_NODES && !nodes.borrow().contains_key(&id) {
-            return;
-        }
-        let name = props
-            .get("node.name")
-            .unwrap_or_default()
-            .chars()
-            .take(MAX_AUDIO_NAME_CHARACTERS)
-            .collect::<String>();
-        let description = props
-            .get("node.description")
-            .or_else(|| props.get("node.nick"))
-            .unwrap_or(&name)
-            .to_owned();
-        let Ok(proxy) = registry.bind::<pipewire::node::Node, _>(global) else {
-            return;
-        };
-        proxy.subscribe_params(&[ParamType::Props]);
-        let param_nodes = Rc::clone(nodes);
-        let param_synced = Rc::clone(synced);
-        let param_publish = Arc::clone(publish);
-        let listener = proxy
-            .add_listener_local()
-            .param(move |_seq, _kind, _index, _next, pod| {
-                if let Some(pod) = pod {
-                    on_node_params(
-                        &param_nodes,
-                        &param_synced,
-                        &param_publish,
-                        started,
-                        id,
-                        pod,
-                    );
-                }
-            })
-            .register();
-        let mut node = AudioNode::bounded(
-            AudioNodeId::new(id),
-            direction,
-            &name,
-            &description,
-            AudioVolume::default(),
-            false,
-            true,
-        );
-        // Runtime control stays disabled until the server exposes the
-        // corresponding writable Props value for this node.
-        node.capabilities = AudioCapabilities::default();
-        nodes.borrow_mut().insert(
-            id,
-            NodeEntry {
-                node: node.clone(),
-                name,
-                proxy,
-                _listener: listener,
-            },
-        );
-        if synced.get() {
-            (publish)(AudioUpdate::NodeChanged {
-                node,
-                observed_millis: elapsed_millis(started),
-            });
-            resolve_defaults(nodes, defaults, publish, started);
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn on_metadata_global(
-        registry: &RegistryRc,
-        nodes: &Nodes,
-        defaults: &Rc<RefCell<Defaults>>,
-        synced: &Rc<Cell<bool>>,
-        metadata_handle: &DefaultMetadata,
-        publish: &Publish,
-        started: Instant,
-        global: &GlobalObject<&DictRef>,
-    ) {
-        let is_default = global
-            .props
-            .and_then(|props| props.get("metadata.name"))
-            .is_some_and(|name| name == "default");
-        if !is_default {
-            return;
-        }
-        // Bind only the first `default` metadata object; a second one would be a
-        // policy anomaly and must not silently replace the route target.
-        let current_id = metadata_handle
-            .borrow()
-            .as_ref()
-            .map(|handle| handle.global_id);
-        if !should_bind_default_metadata(current_id) {
-            return;
-        }
-        let global_id = global.id;
-        let Ok(metadata) = registry.bind::<pipewire::metadata::Metadata, _>(global) else {
-            return;
-        };
-        let property_defaults = Rc::clone(defaults);
-        let property_nodes = Rc::clone(nodes);
-        let property_synced = Rc::clone(synced);
-        let property_publish = Arc::clone(publish);
-        let listener = metadata
-            .add_listener_local()
-            .property(move |_subject, key, _type, value| {
-                on_default_metadata(
-                    &property_defaults,
-                    &property_nodes,
-                    &property_synced,
-                    &property_publish,
-                    started,
-                    key,
-                    value,
-                );
-                0
-            })
-            .register();
-        // The proxy must outlive the loop so route commands can write to it. It
-        // is retained with its global ID and listener so a matching
-        // `global_remove` releases both and a recreated object can rebind.
-        *metadata_handle.borrow_mut() = Some(DefaultMetadataHandle {
-            global_id,
-            proxy: metadata,
-            _listener: listener,
-        });
-    }
-
-    fn on_node_params(
-        nodes: &Nodes,
-        synced: &Rc<Cell<bool>>,
-        publish: &Publish,
-        started: Instant,
-        id: u32,
-        pod: &Pod,
-    ) {
-        let Some(parsed) = parse_props_pod(pod.as_bytes()) else {
-            return;
-        };
-        let mut borrow = nodes.borrow_mut();
-        let Some(entry) = borrow.get_mut(&id) else {
-            return;
-        };
-        if let Some(volume) = parsed.mean_volume() {
-            entry.node.volume = volume;
-            entry.node.capabilities.can_set_volume = true;
-        }
-        if let Some(muted) = parsed.muted {
-            entry.node.muted = muted;
-            entry.node.capabilities.can_set_mute = true;
-        }
-        let node = entry.node.clone();
-        drop(borrow);
-        if synced.get() {
-            (publish)(AudioUpdate::NodeChanged {
-                node,
-                observed_millis: elapsed_millis(started),
-            });
-        }
-    }
-
-    fn on_default_metadata(
-        defaults: &Rc<RefCell<Defaults>>,
-        nodes: &Nodes,
-        synced: &Rc<Cell<bool>>,
-        publish: &Publish,
-        started: Instant,
-        key: Option<&str>,
-        value: Option<&str>,
-    ) {
-        let Some(key) = key else {
-            return;
-        };
-        let name = value.and_then(parse_default_name);
-        match key {
-            "default.audio.sink" => defaults.borrow_mut().sink_name = name,
-            "default.audio.source" => defaults.borrow_mut().source_name = name,
-            _ => return,
-        }
-        if synced.get() {
-            resolve_defaults(nodes, defaults, publish, started);
-        }
-    }
-
-    fn publish_snapshot(
-        nodes: &Nodes,
-        defaults: &Rc<RefCell<Defaults>>,
-        publish: &Publish,
-        started: Instant,
-    ) {
-        let defaults = defaults.borrow();
-        let borrow = nodes.borrow();
-        let mut snapshot = borrow
-            .values()
-            .map(|entry| entry.node.clone())
-            .collect::<Vec<_>>();
-        snapshot.sort_by_key(|node| node.id);
-        let resolve = |direction, wanted: Option<&str>| {
-            wanted.and_then(|wanted| {
-                borrow
-                    .values()
-                    .find(|entry| entry.name == wanted && entry.node.direction == direction)
-                    .map(|entry| entry.node.id)
-            })
-        };
-        (publish)(AudioUpdate::Snapshot {
-            nodes: snapshot,
-            default_sink: resolve(AudioDirection::Sink, defaults.sink_name.as_deref()),
-            default_source: resolve(AudioDirection::Source, defaults.source_name.as_deref()),
-            observed_millis: elapsed_millis(started),
-        });
-    }
-
-    fn resolve_defaults(
-        nodes: &Nodes,
-        defaults: &Rc<RefCell<Defaults>>,
-        publish: &Publish,
-        started: Instant,
-    ) {
-        let defaults = defaults.borrow();
-        let borrow = nodes.borrow();
-        for (direction, wanted) in [
-            (AudioDirection::Sink, defaults.sink_name.as_deref()),
-            (AudioDirection::Source, defaults.source_name.as_deref()),
-        ] {
-            let resolved = wanted.and_then(|wanted| {
-                borrow
-                    .values()
-                    .find(|entry| entry.name == wanted && entry.node.direction == direction)
-                    .map(|entry| entry.node.id)
-            });
-            (publish)(AudioUpdate::DefaultChanged {
-                direction,
-                node: resolved,
-                observed_millis: elapsed_millis(started),
-            });
-        }
-    }
-
-    fn apply_command(
-        nodes: &Nodes,
-        metadata: &DefaultMetadata,
-        command: &AudioCommand,
-        publish: &Publish,
-        started: Instant,
-    ) {
-        let (label, result) = dispatch(nodes, metadata, command);
-        (publish)(AudioUpdate::CommandOutcome {
-            outcome: AudioCommandOutcome {
-                label,
-                error: result.err(),
-            },
-            observed_millis: elapsed_millis(started),
-        });
-    }
-
-    fn dispatch(
-        nodes: &Nodes,
-        metadata: &DefaultMetadata,
-        command: &AudioCommand,
-    ) -> (String, Result<(), AudioCommandError>) {
-        let borrow = nodes.borrow();
-        match command.kind {
-            AudioCommandKind::SetVolume { id, volume } => (
-                "Volume".to_owned(),
-                set_node_props(&borrow, id.get(), Some(volume), None),
-            ),
-            AudioCommandKind::SetMute { id, muted } => (
-                "Mute".to_owned(),
-                set_node_props(&borrow, id.get(), None, Some(muted)),
-            ),
-            AudioCommandKind::ToggleMute { id } => {
-                match borrow.get(&id.get()).map(|entry| !entry.node.muted) {
-                    Some(muted) => (
-                        "Mute".to_owned(),
-                        set_node_props(&borrow, id.get(), None, Some(muted)),
-                    ),
-                    None => ("Mute".to_owned(), Err(AudioCommandError::UnknownNode)),
-                }
-            }
-            AudioCommandKind::SetDefault { direction, id } => (
-                "Route".to_owned(),
-                set_default_node(&borrow, metadata, direction, id.get()),
-            ),
-            AudioCommandKind::MoveStream { .. } => (
-                "Route".to_owned(),
-                // Per-stream movement targets a stream node this endpoint-only
-                // model does not represent, and its native contract is not
-                // verified. It stays an explicit transport limitation.
-                Err(AudioCommandError::Transport),
-            ),
-        }
-    }
-
-    fn set_node_props(
-        nodes: &HashMap<u32, NodeEntry>,
-        id: u32,
-        volume: Option<AudioVolume>,
-        muted: Option<bool>,
-    ) -> Result<(), AudioCommandError> {
-        let entry = nodes.get(&id).ok_or(AudioCommandError::UnknownNode)?;
-        let bytes = build_props_pod(volume, muted).ok_or(AudioCommandError::Transport)?;
-        let pod = Pod::from_bytes(&bytes).ok_or(AudioCommandError::Transport)?;
-        entry.proxy.set_param(ParamType::Props, 0, pod);
-        Ok(())
-    }
-
-    /// Ask WirePlumber to make a node the configured default for its direction.
-    ///
-    /// This writes the persistent `default.configured.audio.{sink,source}` key
-    /// of the `default` metadata, the same cooperation path `wpctl set-default`
-    /// uses. WirePlumber validates and applies the request, then republishes the
-    /// resulting `default.audio.*` selection, which arrives back through the
-    /// metadata property listener as a `DefaultChanged` update. Weftwise never
-    /// writes the runtime output key directly.
-    fn set_default_node(
-        nodes: &HashMap<u32, NodeEntry>,
-        metadata: &DefaultMetadata,
-        direction: AudioDirection,
-        id: u32,
-    ) -> Result<(), AudioCommandError> {
-        let entry = nodes.get(&id).ok_or(AudioCommandError::UnknownNode)?;
-        if entry.node.direction != direction {
-            return Err(AudioCommandError::WrongDirection);
-        }
-        if !entry.node.available {
-            return Err(AudioCommandError::Unsupported);
-        }
-        let value = default_metadata_value(&entry.name).ok_or(AudioCommandError::Transport)?;
-        let handle = metadata.borrow();
-        let handle = handle.as_ref().ok_or(AudioCommandError::Transport)?;
-        handle.proxy.set_property(
-            0,
-            default_metadata_key(direction),
-            Some(DEFAULT_METADATA_TYPE),
-            Some(&value),
-        );
-        Ok(())
-    }
-
-    fn audio_direction(props: &DictRef) -> Option<AudioDirection> {
-        let class = props.get("media.class")?;
-        if class.contains("Audio/Sink") {
-            Some(AudioDirection::Sink)
-        } else if class.contains("Audio/Source") {
-            Some(AudioDirection::Source)
-        } else {
-            None
-        }
-    }
-
-    fn parse_default_name(value: &str) -> Option<String> {
-        let object = serde_json::from_str::<serde_json::Value>(value).ok()?;
-        Some(
-            object
-                .get("name")?
-                .as_str()?
-                .chars()
-                .take(MAX_AUDIO_NAME_CHARACTERS)
-                .collect(),
-        )
-    }
-
-    fn elapsed_millis(started: Instant) -> u64 {
-        u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
-    }
-}
+mod transport;
 
 #[cfg(test)]
 mod tests {
@@ -1676,5 +1273,317 @@ mod tests {
         assert!(!should_clear_default_metadata(None, 41));
         // After clearing, the slot is empty and the next object may rebind.
         assert!(should_bind_default_metadata(None));
+    }
+
+    fn candidate(id: u32, running: bool, movable: bool) -> MovableStreamCandidate {
+        MovableStreamCandidate {
+            id: AudioNodeId::new(id),
+            running,
+            movable,
+            has_metadata_permission: true,
+        }
+    }
+
+    const GEN: Generation = Generation::new(1);
+
+    fn ready_enablement() -> MoveEnablement {
+        MoveEnablement {
+            policy_allows: true,
+            metadata_writable: true,
+            overflowed: false,
+        }
+    }
+
+    #[test]
+    fn allow_moving_streams_is_tri_state() {
+        assert_eq!(
+            parse_allow_moving_streams(Some("true")),
+            MoveMovingPolicy::Allowed
+        );
+        assert_eq!(
+            parse_allow_moving_streams(Some(" 1 ")),
+            MoveMovingPolicy::Allowed
+        );
+        assert_eq!(
+            parse_allow_moving_streams(Some("false")),
+            MoveMovingPolicy::Denied
+        );
+        assert_eq!(
+            parse_allow_moving_streams(Some("0")),
+            MoveMovingPolicy::Denied
+        );
+        // Absent or unrecognized values are Unknown, which permits an attempt
+        // but never claims capability.
+        assert_eq!(parse_allow_moving_streams(None), MoveMovingPolicy::Unknown);
+        assert_eq!(
+            parse_allow_moving_streams(Some("maybe")),
+            MoveMovingPolicy::Unknown
+        );
+        assert!(MoveMovingPolicy::Unknown.permits_attempt());
+        assert!(MoveMovingPolicy::Allowed.permits_attempt());
+        assert!(!MoveMovingPolicy::Denied.permits_attempt());
+    }
+
+    #[test]
+    fn metadata_write_requires_write_and_execute() {
+        // Both W (0o200) and X (0o100) are required.
+        assert!(metadata_permits_target_write(PW_PERM_W | PW_PERM_X));
+        assert!(metadata_permits_target_write(0o700));
+        assert!(!metadata_permits_target_write(PW_PERM_W));
+        assert!(!metadata_permits_target_write(PW_PERM_X));
+        assert!(!metadata_permits_target_write(0o400));
+        assert!(!metadata_permits_target_write(0));
+    }
+
+    #[test]
+    fn selection_requires_exactly_one_running_movable_stream() {
+        // Zero running movable streams is unavailable.
+        assert_eq!(
+            select_movable_stream(&[], ready_enablement(), GEN),
+            MovableStreamState::Unavailable
+        );
+        // A single running movable stream is the unique active subject and
+        // carries the connection generation it was selected on.
+        assert_eq!(
+            select_movable_stream(&[candidate(7, true, true)], ready_enablement(), GEN),
+            MovableStreamState::Active {
+                stream: AudioNodeId::new(7),
+                generation: GEN,
+            }
+        );
+        // A non-running or non-movable stream does not count.
+        assert_eq!(
+            select_movable_stream(
+                &[candidate(7, false, true), candidate(8, true, false)],
+                ready_enablement(),
+                GEN,
+            ),
+            MovableStreamState::Unavailable
+        );
+        // Two running movable streams are ambiguous.
+        assert_eq!(
+            select_movable_stream(
+                &[candidate(7, true, true), candidate(8, true, true)],
+                ready_enablement(),
+                GEN,
+            ),
+            MovableStreamState::Ambiguous
+        );
+    }
+
+    #[test]
+    fn selection_ignores_a_subject_without_metadata_permission() {
+        // The only running movable stream lacks PW_PERM_M on its subject, so it
+        // cannot be moved and the action is unavailable rather than offered.
+        let no_perm = MovableStreamCandidate {
+            has_metadata_permission: false,
+            ..candidate(7, true, true)
+        };
+        assert_eq!(
+            select_movable_stream(&[no_perm], ready_enablement(), GEN),
+            MovableStreamState::Unavailable
+        );
+        // When one of two running movable streams lacks the permission, the
+        // other is the unique movable subject rather than an ambiguous pair.
+        assert_eq!(
+            select_movable_stream(
+                &[no_perm, candidate(8, true, true)],
+                ready_enablement(),
+                GEN
+            ),
+            MovableStreamState::Active {
+                stream: AudioNodeId::new(8),
+                generation: GEN,
+            }
+        );
+        assert!(subject_permits_metadata(PW_PERM_M));
+        assert!(subject_permits_metadata(0o710));
+        assert!(!subject_permits_metadata(PW_PERM_W | PW_PERM_X));
+        assert!(!subject_permits_metadata(0));
+    }
+
+    #[test]
+    fn movable_stream_class_requires_exact_trimmed_equality() {
+        assert!(is_movable_stream_class("Stream/Output/Audio"));
+        // Surrounding whitespace is trimmed before the exact comparison.
+        assert!(is_movable_stream_class("  Stream/Output/Audio\n"));
+        // Decorated, prefixed, suffixed, or unrelated classes are rejected.
+        assert!(!is_movable_stream_class("Stream/Output/Audio/Virtual"));
+        assert!(!is_movable_stream_class("Stream/Output/Audiofoo"));
+        assert!(!is_movable_stream_class("xStream/Output/Audio"));
+        assert!(!is_movable_stream_class("Stream/Output/Video"));
+        assert!(!is_movable_stream_class("Stream/Input/Audio"));
+        assert!(!is_movable_stream_class(""));
+        assert_eq!(MOVABLE_STREAM_MEDIA_CLASS, "Stream/Output/Audio");
+    }
+
+    #[test]
+    fn stale_generation_move_is_rejected() {
+        // A move built against the live generation is fresh; the same command
+        // after a reconnect to a newer generation is stale.
+        assert!(move_is_fresh(Generation::new(3), Generation::new(3)));
+        assert!(!move_is_fresh(Generation::new(3), Generation::new(4)));
+        assert!(!move_is_fresh(Generation::new(4), Generation::new(3)));
+    }
+
+    #[test]
+    fn selection_disables_on_policy_permission_or_overflow() {
+        let one = [candidate(7, true, true)];
+        // Explicit policy denial disables even a unique candidate.
+        assert_eq!(
+            select_movable_stream(
+                &one,
+                MoveEnablement {
+                    policy_allows: false,
+                    ..ready_enablement()
+                },
+                GEN,
+            ),
+            MovableStreamState::Disabled
+        );
+        // A metadata object without write permission disables the action.
+        assert_eq!(
+            select_movable_stream(
+                &one,
+                MoveEnablement {
+                    metadata_writable: false,
+                    ..ready_enablement()
+                },
+                GEN,
+            ),
+            MovableStreamState::Disabled
+        );
+        // Inventory overflow disables rather than guessing over a partial set.
+        assert_eq!(
+            select_movable_stream(
+                &one,
+                MoveEnablement {
+                    overflowed: true,
+                    ..ready_enablement()
+                },
+                GEN,
+            ),
+            MovableStreamState::Disabled
+        );
+    }
+
+    #[test]
+    fn target_object_value_is_the_decimal_serial() {
+        assert_eq!(target_object_metadata_value(0), "0");
+        assert_eq!(target_object_metadata_value(4_294_967_297), "4294967297");
+        assert_eq!(TARGET_OBJECT_METADATA_KEY, "target.object");
+        assert_eq!(TARGET_OBJECT_METADATA_TYPE, "Spa:Id");
+    }
+
+    #[test]
+    fn move_stream_validates_against_active_selection() {
+        let mut state = AudioState::default();
+        state.apply_snapshot(vec![sink(1, "a"), source(2, "b")], None, None);
+
+        // With no movable stream, the move is unsupported regardless of subject.
+        assert_eq!(
+            state.validate(AudioCommandKind::MoveStream {
+                stream: AudioNodeId::new(5),
+                target: AudioNodeId::new(1),
+            }),
+            Err(AudioCommandError::Unsupported)
+        );
+
+        // With an active movable stream, moving it to an available sink is ok,
+        // and validation binds the request to the selection's generation.
+        state.set_movable_stream(MovableStreamState::Active {
+            stream: AudioNodeId::new(5),
+            generation: Generation::new(7),
+        });
+        assert_eq!(
+            state.validate(AudioCommandKind::MoveStream {
+                stream: AudioNodeId::new(5),
+                target: AudioNodeId::new(1),
+            }),
+            Ok(AudioCommand {
+                kind: AudioCommandKind::MoveStreamTo {
+                    stream: AudioNodeId::new(5),
+                    target: AudioNodeId::new(1),
+                    generation: Generation::new(7),
+                },
+            })
+        );
+        // A stamped adapter command whose generation still matches re-validates,
+        // but one built against a stale generation is rejected.
+        assert!(
+            state
+                .validate(AudioCommandKind::MoveStreamTo {
+                    stream: AudioNodeId::new(5),
+                    target: AudioNodeId::new(1),
+                    generation: Generation::new(7),
+                })
+                .is_ok()
+        );
+        assert_eq!(
+            state.validate(AudioCommandKind::MoveStreamTo {
+                stream: AudioNodeId::new(5),
+                target: AudioNodeId::new(1),
+                generation: Generation::new(6),
+            }),
+            Err(AudioCommandError::Unsupported)
+        );
+        // A subject that is not the active stream is unsupported.
+        assert_eq!(
+            state.validate(AudioCommandKind::MoveStream {
+                stream: AudioNodeId::new(6),
+                target: AudioNodeId::new(1),
+            }),
+            Err(AudioCommandError::Unsupported)
+        );
+        // A source target is the wrong direction even with an active stream.
+        assert_eq!(
+            state.validate(AudioCommandKind::MoveStream {
+                stream: AudioNodeId::new(5),
+                target: AudioNodeId::new(2),
+            }),
+            Err(AudioCommandError::WrongDirection)
+        );
+        // An unknown target node is rejected.
+        assert_eq!(
+            state.validate(AudioCommandKind::MoveStream {
+                stream: AudioNodeId::new(5),
+                target: AudioNodeId::new(99),
+            }),
+            Err(AudioCommandError::UnknownNode)
+        );
+        // Ambiguous or disabled selection offers no move.
+        state.set_movable_stream(MovableStreamState::Ambiguous);
+        assert_eq!(
+            state.validate(AudioCommandKind::MoveStream {
+                stream: AudioNodeId::new(5),
+                target: AudioNodeId::new(1),
+            }),
+            Err(AudioCommandError::Unsupported)
+        );
+    }
+
+    #[test]
+    fn movable_stream_state_accessors() {
+        let active = MovableStreamState::Active {
+            stream: AudioNodeId::new(3),
+            generation: Generation::new(9),
+        };
+        assert_eq!(active.active(), Some(AudioNodeId::new(3)));
+        assert_eq!(
+            active.active_generation(),
+            Some((AudioNodeId::new(3), Generation::new(9)))
+        );
+        assert!(active.can_move());
+        assert_eq!(MovableStreamState::Unavailable.active(), None);
+        assert_eq!(MovableStreamState::Unavailable.active_generation(), None);
+        assert!(!MovableStreamState::Ambiguous.can_move());
+        assert!(!MovableStreamState::Disabled.can_move());
+        // Default is the safe Unavailable.
+        assert_eq!(
+            MovableStreamState::default(),
+            MovableStreamState::Unavailable
+        );
+        // The generation newtype round-trips its counter value.
+        assert_eq!(Generation::new(42).get(), 42);
     }
 }

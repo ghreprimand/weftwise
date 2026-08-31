@@ -3,7 +3,7 @@
 use crate::context::arbitration::Severity;
 use crate::context::feedback::{FeedbackEvent, FeedbackKind};
 use crate::services::audio::{
-    AudioCommand, AudioCommandKind, AudioCommandOutcome, AudioNode, AudioUpdate,
+    AudioCommand, AudioCommandKind, AudioCommandOutcome, AudioNode, AudioUpdate, MovableStreamState,
 };
 
 use super::{AppState, OutputId};
@@ -23,6 +23,11 @@ impl AppState {
         match update {
             AudioUpdate::Connecting => {
                 self.audio.mark_stale();
+                // A reconnecting transport cannot vouch for the previous
+                // selection; clear it so a stale active stream cannot validate a
+                // move to a vanished subject until the adapter re-publishes.
+                self.audio
+                    .set_movable_stream(MovableStreamState::Unavailable);
                 return Vec::new();
             }
             AudioUpdate::Snapshot {
@@ -41,8 +46,16 @@ impl AppState {
             AudioUpdate::CommandOutcome { outcome, .. } => {
                 feedback_events.push(audio_outcome_feedback(&outcome));
             }
+            AudioUpdate::MovableStreamChanged { state, .. } => {
+                // A capability projection only; it gates the move action and
+                // produces no user-facing feedback candidate.
+                self.audio.set_movable_stream(state);
+                return Vec::new();
+            }
             AudioUpdate::Unavailable => {
                 self.audio.mark_unavailable();
+                self.audio
+                    .set_movable_stream(MovableStreamState::Unavailable);
                 return self.output_ids().collect();
             }
         }
@@ -124,6 +137,9 @@ fn audio_update_observed_millis(update: &AudioUpdate) -> u64 {
             observed_millis, ..
         }
         | AudioUpdate::CommandOutcome {
+            observed_millis, ..
+        }
+        | AudioUpdate::MovableStreamChanged {
             observed_millis, ..
         } => *observed_millis,
     }
