@@ -72,8 +72,39 @@ impl InputRegionGeometry {
         }
     }
 
-    /// Compute the narrow right-edge leg that makes a collapsed target reachable
+    /// Compute the narrow left-edge leg that makes a collapsed target reachable
     /// horizontally even when another output covers the target's top edge.
+    #[must_use]
+    pub const fn left_edge_leg(
+        width: i32,
+        level: PresentationLevel,
+        activation: ActivationRegion,
+    ) -> Self {
+        let width = if width < 0 { 0 } else { width };
+        if !matches!(level, PresentationLevel::Selvage) || width <= 1 || activation.width <= 0 {
+            return Self {
+                x: 0,
+                y: 0,
+                width: 0,
+                height: 0,
+            };
+        }
+        let leg_width = if activation.height < 0 {
+            0
+        } else if activation.height > width {
+            width
+        } else {
+            activation.height
+        };
+        Self {
+            x: 0,
+            y: 0,
+            width: leg_width,
+            height: SURFACE_HEIGHT,
+        }
+    }
+
+    /// Compute the matching narrow right-edge activation leg.
     #[must_use]
     pub const fn right_edge_leg(
         width: i32,
@@ -114,7 +145,7 @@ pub struct ActivationRegion {
     pub width: i32,
     /// Bounded island height.
     pub height: i32,
-    /// Reveal on entry because both adjoining edges are internal to the layout.
+    /// Reveal on entry because every adjoining entry edge is internal to the layout.
     pub immediate: bool,
 }
 
@@ -191,6 +222,12 @@ pub fn activation_region(
         exposed.push((cursor, target_end));
     }
     let top_edge_is_internal = exposed.is_empty();
+    let left_edge_is_internal = outputs.iter().any(|other| {
+        other != &target
+            && other.x.saturating_add(other.width).abs_diff(target_start) <= 2
+            && other.y < target.y.saturating_add(SURFACE_HEIGHT)
+            && other.y.saturating_add(other.height) > target.y
+    });
     let right_edge_is_internal = outputs.iter().any(|other| {
         other != &target
             && other.x.abs_diff(target_end) <= 2
@@ -213,7 +250,7 @@ pub fn activation_region(
         x: global_x.saturating_sub(target.x),
         width,
         height,
-        immediate: top_edge_is_internal && right_edge_is_internal,
+        immediate: top_edge_is_internal && left_edge_is_internal && right_edge_is_internal,
     }
 }
 
@@ -374,8 +411,9 @@ fn apply_input_region_to_surface(
     source: &'static str,
 ) {
     let geometry = InputRegionGeometry::for_level(width, level, activation);
+    let left_edge_leg = InputRegionGeometry::left_edge_leg(width, level, activation);
     let right_edge_leg = InputRegionGeometry::right_edge_leg(width, level, activation);
-    let rectangles = [geometry, right_edge_leg]
+    let rectangles = [geometry, left_edge_leg, right_edge_leg]
         .into_iter()
         .filter(|rectangle| rectangle.width > 0 && rectangle.height > 0)
         .map(|rectangle| {
@@ -390,6 +428,7 @@ fn apply_input_region_to_surface(
         x = geometry.x,
         width = geometry.width,
         height = geometry.height,
+        left_edge_width = left_edge_leg.width,
         right_edge_width = right_edge_leg.width,
         empty = geometry.width == 0,
         ?level,
@@ -498,13 +537,22 @@ mod tests {
     }
 
     #[test]
-    fn collapsed_region_has_a_right_edge_leg_for_horizontal_entry() {
+    fn collapsed_region_has_matching_corner_legs_for_horizontal_entry() {
         let activation = ActivationRegion {
             x: 400,
             width: 96,
             height: 12,
             immediate: false,
         };
+        assert_eq!(
+            InputRegionGeometry::left_edge_leg(1920, PresentationLevel::Selvage, activation,),
+            InputRegionGeometry {
+                x: 0,
+                y: 0,
+                width: 12,
+                height: SURFACE_HEIGHT,
+            }
+        );
         assert_eq!(
             InputRegionGeometry::right_edge_leg(1920, PresentationLevel::Selvage, activation,),
             InputRegionGeometry {
@@ -513,6 +561,10 @@ mod tests {
                 width: 12,
                 height: SURFACE_HEIGHT,
             }
+        );
+        assert_eq!(
+            InputRegionGeometry::left_edge_leg(1920, PresentationLevel::Ribbon, activation,).width,
+            0
         );
         assert_eq!(
             InputRegionGeometry::right_edge_leg(1920, PresentationLevel::Ribbon, activation,).width,
@@ -534,6 +586,12 @@ mod tests {
             width: 400,
             height: 100,
         };
+        let left = OutputRectangle {
+            x: -100,
+            y: 101,
+            width: 200,
+            height: 200,
+        };
         let right = OutputRectangle {
             x: 501,
             y: 101,
@@ -542,10 +600,40 @@ mod tests {
         };
         let region = activation_region(
             target,
-            &[target, above, right],
+            &[target, above, left, right],
             &ActivationConfig::default(),
         );
         assert!(region.immediate);
+    }
+
+    #[test]
+    fn either_physical_corner_keeps_dwell_when_the_top_edge_is_internal() {
+        let target = OutputRectangle {
+            x: 100,
+            y: 100,
+            width: 400,
+            height: 200,
+        };
+        let above = OutputRectangle {
+            x: 100,
+            y: 0,
+            width: 400,
+            height: 100,
+        };
+        let right = OutputRectangle {
+            x: 500,
+            y: 100,
+            width: 200,
+            height: 200,
+        };
+
+        let region = activation_region(
+            target,
+            &[target, above, right],
+            &ActivationConfig::default(),
+        );
+
+        assert!(!region.immediate);
     }
 
     #[test]

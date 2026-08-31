@@ -80,7 +80,7 @@ pub struct ActivationConfig {
     pub mode: ActivationMode,
     /// Maximum activation island width.
     pub width: u16,
-    /// Top-island depth and right-edge leg width; the visual Selvage remains thinner.
+    /// Top-island depth and corner-leg width; the visual Selvage remains thinner.
     pub height: u8,
     /// Inset from the selected exposed segment boundary.
     pub margin: u16,

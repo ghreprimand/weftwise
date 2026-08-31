@@ -68,9 +68,10 @@ metadata, and process arguments by default.
 
 `[activation]` selects `exposed-edge` or comparison-only `full-width` input and
 bounds the island width, height, margin, and alignment in GDK logical pixels.
-The height also controls the width of the short right-edge leg used for
-horizontal entry on internal top edges. A fully internal top-right corner
-reveals on bounded entry; physical edges retain the configured dwell.
+The height also controls the width of the short left- and right-edge legs used
+for horizontal entry on internal top edges. An output surrounded across its
+top and both upper sides reveals on bounded entry; physical corners retain the
+configured dwell.
 `[ribbon]` enables the workspace, selected context, and clock regions.
 `[theme]` supplies validated semantic colors, font family, font size, and corner
 radius. Restart Weftwise after editing; live reload has not landed.

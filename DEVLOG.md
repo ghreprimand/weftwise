@@ -6,6 +6,27 @@ or unmeasured. Planned work is never presented as implemented behavior.
 
 ---
 
+## 2026-08-31 - Mirror collapsed activation at both corners
+
+The collapsed input region now includes matching narrow legs at the top-left
+and top-right corners of every output. Either physical corner can enter the
+same bounded dwell interaction, including when an output above covers the
+horizontal top edge. The visual Selvage remains 3 pixels high and pointer input
+still passes through outside the top island and two corner legs.
+
+Topology handling now distinguishes both upper side edges. Immediate reveal is
+used only when the top, left, and right entry paths all continue directly into
+neighboring outputs; if either corner is a physical boundary, both corner
+targets retain the configured dwell. The rule continues to use GDK logical
+rectangles with the existing fractional-layout tolerance and contains no
+monitor-name or resolution special case.
+
+Verified with the complete host gate: formatting, warnings-denied Clippy, 117
+passing library tests with one live-system-bus test explicitly ignored, all
+integration tests, documentation, file-size and dependency-topology checks,
+public-safety, and RustSec across 172 dependencies passed. Native comfort and
+pointer pass-through remain part of the open manual Hyprland proof.
+
 ## 2026-08-31 - Bind the authenticated local activity endpoint
 
 The Phase 6 protocol now has a supervised Unix listener beneath the application

@@ -7,8 +7,8 @@ reduced_motion = false
 # The default trigger is a small island placed inside the widest top-edge
 # segment that is not covered by an output above it. All dimensions are GDK
 # logical pixels, so fractional-scale outputs keep the same physical intent.
-# The height also sets the width of a short right-edge leg, which can be entered
-# horizontally when an internal top edge leads directly into another output.
+# The height also sets the width of short left- and right-edge legs, which can
+# be entered horizontally when an internal top edge leads into another output.
 [activation]
 mode = "exposed-edge"
 width = 96

@@ -350,13 +350,14 @@ deliberately empty; the first positive layout replaces it synchronously so
 root-message latency cannot leave a stale empty region. Pointer entry and exit
 are observed in capture phase on the fixed-height root widget.
 
-The collapsed region also includes a narrow leg down the right edge of the
-fixed 30-pixel surface. It can be entered horizontally, so a lower output whose
-entire top edge leads into another monitor does not require an impossible
-physical-edge dwell. The leg disappears with the rest of the collapsed input
-region when the Ribbon opens. When the target's top edge and right edge both
-adjoin other outputs, the surface emits an immediate-entry action rather than
-scheduling a dwell that pointer traversal cannot complete. GDK logical
+The collapsed region also includes matching narrow legs down the left and right
+edges of the fixed 30-pixel surface. Either can be entered horizontally, so a
+lower output whose entire top edge leads into another monitor does not require
+an impossible physical-edge dwell. The legs disappear with the rest of the
+collapsed input region when the Ribbon opens. When the target's top, left, and
+right entry edges all adjoin other outputs, the surface emits an
+immediate-entry action rather than scheduling a dwell that pointer traversal
+cannot complete. GDK logical
 rectangles and a two-pixel fractional-layout tolerance determine adjacency, so
 the rule has no connector, resolution, or machine-specific cases. Collapsed
 workspace and status marks are hidden at the same transition instead of

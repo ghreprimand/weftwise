@@ -191,6 +191,15 @@ fn input_regions_are_fixed_to_visible_height_and_start_empty_before_layout() {
         }
     );
     assert_eq!(
+        InputRegionGeometry::left_edge_leg(512, PresentationLevel::Selvage, activation),
+        InputRegionGeometry {
+            x: 0,
+            y: 0,
+            width: 8,
+            height: SURFACE_HEIGHT,
+        }
+    );
+    assert_eq!(
         InputRegionGeometry::right_edge_leg(512, PresentationLevel::Selvage, activation),
         InputRegionGeometry {
             x: 504,
