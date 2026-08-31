@@ -80,7 +80,7 @@ pub struct ActivationConfig {
     pub mode: ActivationMode,
     /// Maximum activation island width.
     pub width: u16,
-    /// Activation island height; the visual Selvage remains thinner.
+    /// Top-island depth and right-edge leg width; the visual Selvage remains thinner.
     pub height: u8,
     /// Inset from the selected exposed segment boundary.
     pub margin: u16,
@@ -93,7 +93,7 @@ impl Default for ActivationConfig {
         Self {
             mode: ActivationMode::ExposedEdge,
             width: 96,
-            height: 8,
+            height: 12,
             margin: 12,
             anchor: ActivationAnchor::End,
         }
@@ -223,7 +223,7 @@ impl Config {
                 setting: "activation.width",
             });
         }
-        if !(3..=12).contains(&self.activation.height) {
+        if !(3..=20).contains(&self.activation.height) {
             return Err(ConfigError::InvalidSetting {
                 setting: "activation.height",
             });

@@ -75,6 +75,7 @@ pub(crate) struct TopEdgeWidgets {
     ribbon_navigation_label: gtk::Label,
     ribbon_context_label: gtk::Label,
     ribbon_status_label: gtk::Label,
+    selvage: gtk::Box,
     navigation_marks: gtk::Box,
     activity_marks: gtk::Box,
     attention_marks: gtk::Box,
@@ -287,6 +288,7 @@ impl TopEdgeWidgets {
             ribbon_navigation_label,
             ribbon_context_label,
             ribbon_status_label,
+            selvage,
             navigation_marks,
             activity_marks,
             attention_marks,
@@ -307,6 +309,8 @@ impl TopEdgeWidgets {
             });
         self.revealer
             .set_reveal_child(level != PresentationLevel::Selvage);
+        self.selvage
+            .set_visible(level == PresentationLevel::Selvage);
         self.ribbon_navigation_label
             .set_label(&view.ribbon_navigation_label);
         self.ribbon_context_label

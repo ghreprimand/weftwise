@@ -6,12 +6,31 @@ or unmeasured. Planned work is never presented as implemented behavior.
 
 ---
 
+## 2026-08-31 - Make the right-corner trigger reachable
+
+Native testing exposed a topology the horizontal activation island could not
+solve: one lower output's entire top edge led directly into the outputs above
+it. The collapsed input region now combines the monitor-aware top island with a
+narrow leg down the right edge of the fixed-height surface. The leg can be
+entered horizontally without increasing the full-width application gesture
+conflict. The default thickness increases from 8 to 12 GDK logical pixels and
+remains bounded and configurable. Collapsed workspace and status marks are now
+hidden while the Ribbon or Panel is visible, removing the mark group that
+overlaid the top-left Ribbon content.
+
+Verified with the complete host default gate, the native `audio-transport`
+Clippy/test/documentation gate, and the digest-pinned Arch baseline under Rust
+1.96.0. Formatting, warnings-denied Clippy, default and feature tests,
+documentation, file-size and dependency-topology checks, RustSec across 172
+dependencies, and public-safety passed. A live four-output session is running
+the revised geometry for manual trigger and appearance acceptance.
+
 ## 2026-08-31 - Refine exposed-edge activation and the configurable Ribbon
 
 The collapsed pointer target is now independent from the 3-pixel visual
 Selvage. Each output selects the widest portion of its top edge that is not
 covered by an adjacent output above it, then places a bounded activation island
-inside that segment. The default island is 96 by 8 GDK logical pixels, aligned
+inside that segment. The default island is 96 by 12 GDK logical pixels, aligned
 near the segment end with a 12-pixel inset. This makes a partially exposed edge
 usable in vertically stacked layouts and limits competition with application
 top-edge gestures. Full-width activation remains an explicit comparison and

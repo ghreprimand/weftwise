@@ -39,6 +39,12 @@ reveals a 26-30 pixel Ribbon. Moving into the Ribbon keeps it open; leaving
 starts the dismissal timer. Full-width activation remains an explicit
 comparison and rollback mode.
 
+A narrow leg extends down the right edge of the fixed-height surface. This
+second way into the same dwell state can be entered horizontally and remains
+reachable when another output covers the entire top edge. Once the Ribbon is
+visible, the collapsed workspace and status marks are hidden so they cannot
+overlay its three text regions.
+
 The Ribbon has persistent workspace, context, and clock regions. The context
 region labels the selected candidate or active client and exposes its actions.
 The implemented Hyprland projection shows the active workspace and bounded

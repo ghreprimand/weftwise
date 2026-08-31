@@ -71,6 +71,38 @@ impl InputRegionGeometry {
             },
         }
     }
+
+    /// Compute the narrow right-edge leg that makes a collapsed target reachable
+    /// horizontally even when another output covers the target's top edge.
+    #[must_use]
+    pub const fn right_edge_leg(
+        width: i32,
+        level: PresentationLevel,
+        activation: ActivationRegion,
+    ) -> Self {
+        let width = if width < 0 { 0 } else { width };
+        if !matches!(level, PresentationLevel::Selvage) || width <= 1 || activation.width <= 0 {
+            return Self {
+                x: 0,
+                y: 0,
+                width: 0,
+                height: 0,
+            };
+        }
+        let leg_width = if activation.height < 0 {
+            0
+        } else if activation.height > width {
+            width
+        } else {
+            activation.height
+        };
+        Self {
+            x: width.saturating_sub(leg_width),
+            y: 0,
+            width: leg_width,
+            height: SURFACE_HEIGHT,
+        }
+    }
 }
 
 /// Collapsed pointer activation island in surface-local logical coordinates.
@@ -327,13 +359,15 @@ fn apply_input_region_to_surface(
     source: &'static str,
 ) {
     let geometry = InputRegionGeometry::for_level(width, level, activation);
-    let region = if geometry.width == 0 {
-        cairo::Region::create()
-    } else {
-        let rectangle =
-            cairo::RectangleInt::new(geometry.x, geometry.y, geometry.width, geometry.height);
-        cairo::Region::create_rectangle(&rectangle)
-    };
+    let right_edge_leg = InputRegionGeometry::right_edge_leg(width, level, activation);
+    let rectangles = [geometry, right_edge_leg]
+        .into_iter()
+        .filter(|rectangle| rectangle.width > 0 && rectangle.height > 0)
+        .map(|rectangle| {
+            cairo::RectangleInt::new(rectangle.x, rectangle.y, rectangle.width, rectangle.height)
+        })
+        .collect::<Vec<_>>();
+    let region = cairo::Region::create_rectangles(&rectangles);
     surface.set_input_region(Some(&region));
     tracing::debug!(
         output = ?output,
@@ -341,6 +375,7 @@ fn apply_input_region_to_surface(
         x = geometry.x,
         width = geometry.width,
         height = geometry.height,
+        right_edge_width = right_edge_leg.width,
         empty = geometry.width == 0,
         ?level,
         "native input region installed"
@@ -417,7 +452,7 @@ mod tests {
             ActivationRegion {
                 x: 292,
                 width: 96,
-                height: 8,
+                height: 12,
             }
         );
     }
@@ -439,8 +474,30 @@ mod tests {
             ActivationRegion {
                 x: 0,
                 width: 320,
-                height: 8,
+                height: 12,
             }
+        );
+    }
+
+    #[test]
+    fn collapsed_region_has_a_right_edge_leg_for_horizontal_entry() {
+        let activation = ActivationRegion {
+            x: 400,
+            width: 96,
+            height: 12,
+        };
+        assert_eq!(
+            InputRegionGeometry::right_edge_leg(1920, PresentationLevel::Selvage, activation,),
+            InputRegionGeometry {
+                x: 1908,
+                y: 0,
+                width: 12,
+                height: SURFACE_HEIGHT,
+            }
+        );
+        assert_eq!(
+            InputRegionGeometry::right_edge_leg(1920, PresentationLevel::Ribbon, activation,).width,
+            0
         );
     }
 }
