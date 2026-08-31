@@ -39,12 +39,12 @@ reveals a 26-30 pixel Ribbon. Moving into the Ribbon keeps it open; leaving
 starts the dismissal timer. Full-width activation remains an explicit
 comparison and rollback mode.
 
-A narrow leg extends down each edge of the fixed-height surface. These matching
-corner targets enter the same dwell state horizontally and remain reachable
-when another output covers the entire top edge. If the top, left, and right
-entry edges are all internal to the monitor layout, entry reveals immediately
-because pointer motion through neighboring outputs cannot sustain a dwell.
-Either physical corner retains the configured dwell. Adjacency is derived
+A narrow leg extends down each edge of the fixed-height surface. Either corner
+leg reveals immediately on horizontal entry, while the selected top island
+retains its configured dwell. This keeps both corners reachable when a
+neighboring output prevents the pointer from resting against an edge. If the
+top, left, and right entry edges are all internal to the monitor layout, all
+bounded entry reveals immediately. Adjacency is derived
 from GDK logical output rectangles with a small rounding tolerance, not output
 names or resolutions. Once the Ribbon is visible, the collapsed workspace and
 status marks are hidden so they cannot overlay its three text regions.
@@ -55,8 +55,10 @@ The implemented Hyprland projection shows the active workspace and bounded
 window title on the focused output, and uses a boundary-aligned local clock when
 compositor context is absent. A volume change selects audio temporarily. The
 implemented MPRIS projection shows bounded title and artist text for the
-selected player, with Previous, Play/Pause, Next, and 10-second seek controls
-present only when the player advertises each capability.
+selected player on the compositor-focused output only. MPRIS is session-global
+and does not reliably expose a window-to-output association, so media is never
+duplicated across every Ribbon. Previous, Play/Pause, Next, and 10-second seek
+controls are present only when the player advertises each capability.
 A privacy event can replace ordinary content. The fallback is time, date,
 current workspace, and active application.
 

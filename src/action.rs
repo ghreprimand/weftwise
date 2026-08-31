@@ -8,7 +8,7 @@ use crate::state::OutputId;
 pub enum AppAction {
     /// Pointer entered an output's currently active region.
     PointerEntered(OutputId),
-    /// Pointer entered a bounded internal corner that cannot sustain edge dwell.
+    /// Pointer entered a bounded path that cannot reliably sustain edge dwell.
     PointerEnteredImmediate(OutputId),
     /// Pointer left an output's currently active region.
     PointerLeft(OutputId),

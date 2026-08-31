@@ -22,7 +22,7 @@ jobs:
       RUST_TEST_THREADS: 1
     steps:
       - name: Install native libraries and audit tooling
-        run: pacman -Syu --noconfirm --needed git gtk4 gtk4-layer-shell rustup cargo-audit pkgconf
+        run: pacman -Syu --noconfirm --needed git gtk4 gtk4-layer-shell pipewire clang rustup cargo-audit pkgconf
 
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -39,7 +39,7 @@ jobs:
           cargo --version
 
       - name: Verify native libraries
-        run: pkg-config --modversion gtk4 gtk4-layer-shell-0
+        run: pkg-config --modversion gtk4 gtk4-layer-shell-0 libpipewire-0.3
 
       - name: Run repository gates
         run: bash .github/scripts/check.sh --tree

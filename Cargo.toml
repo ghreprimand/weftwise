@@ -23,7 +23,7 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
 zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
 
 [features]
-default = []
+default = ["audio-transport"]
 # Enables the direct PipeWire audio transport adapter and its optional
 # `pipewire` dependency. The pure audio domain and typed contracts build
 # without this feature; only the loop-thread transport requires it.

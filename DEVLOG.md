@@ -6,6 +6,35 @@ or unmeasured. Planned work is never presented as implemented behavior.
 
 ---
 
+## 2026-08-31 - Localize media and enable native audio by default
+
+Session-global MPRIS state is now projected on the compositor-focused output
+only. Unfocused outputs receive neither the media label, its progress mark, nor
+its capability actions. This is a deterministic single-output policy because
+MPRIS does not reliably expose a window-to-output association; it avoids
+inventing one from untrusted titles or application-name heuristics.
+
+Both narrow side-corner targets now reveal immediately on horizontal entry,
+while the bounded top island retains its configured dwell. This removes the
+physical-edge advantage that made one corner easier to trigger without
+increasing the full-width application's pointer target. The same logical-pixel
+rule applies on every output and scale.
+
+The direct PipeWire transport is now a default Cargo feature on the supported
+OdysseyOS/Arch native baseline. CI installs and verifies the corresponding
+native interface, while `--no-default-features` retains a transport-free build
+for pure-domain development. A live process loaded the PipeWire transport and
+retained the existing remote reveal action; operator observation of a volume or
+mute change remains part of the open manual audio check. Persistent audio,
+network, power, and tray modules remain later Panel and incremental-Waybar work.
+
+Verified with the complete host default gate, explicit transport-free Clippy,
+tests, and documentation, and the digest-pinned Arch baseline under exact Rust
+1.96.0 in both configurations. The default library suite passed 125 tests with
+one live-system-bus test explicitly ignored; the transport-free suite passed
+124 with the same ignore. File-size and dependency-topology checks, RustSec
+across 172 dependencies, and public-safety passed.
+
 ## 2026-08-31 - Add typed activity CLI and keyboard Ribbon reveal
 
 The `weftwise` executable now publishes, updates, completes, and cancels typed

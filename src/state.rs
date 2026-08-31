@@ -724,7 +724,7 @@ pub struct InteractionToken(u64);
 pub enum InteractionInput {
     /// Pointer entered the active top-edge region.
     PointerEntered,
-    /// Pointer entered a bounded internal corner that cannot sustain edge dwell.
+    /// Pointer entered a bounded path that cannot reliably sustain edge dwell.
     PointerEnteredImmediate,
     /// Pointer left the active visible region.
     PointerLeft,
@@ -1178,6 +1178,7 @@ impl AppState {
     }
 
     fn refresh_arbitration_selections(&mut self) {
+        let global_media_output = self.global_detail_output();
         let bindings = self
             .outputs
             .keys()
@@ -1197,6 +1198,12 @@ impl AppState {
                 .arbitration
                 .select_for(output.as_ref(), self.arbitration_now)
             {
+                if projection.source == CandidateSource::Media
+                    && projection.output_affinity.is_none()
+                    && global_media_output != Some(id)
+                {
+                    continue;
+                }
                 self.selected_candidates.insert(id, projection);
             }
         }

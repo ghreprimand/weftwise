@@ -1,8 +1,8 @@
 use weftwise::context::arbitration::CandidateAction;
 use weftwise::services::mpris::MediaUpdate;
 use weftwise::state::{
-    AdapterAvailability, AppState, MediaCapabilities, MediaMetadata, MediaPlaybackStatus,
-    MediaPlayer, MediaPlayerId, OutputId,
+    AdapterAvailability, AppState, CompositorOutput, MediaCapabilities, MediaMetadata,
+    MediaPlaybackStatus, MediaPlayer, MediaPlayerId, OutputId, OutputName,
 };
 
 fn player(
@@ -153,6 +153,63 @@ fn ribbon_progress_and_controls_are_projected_only_when_advertised() {
             .candidate_actions
             .is_empty()
     );
+}
+
+#[test]
+fn session_global_media_is_projected_only_on_the_focused_output() {
+    let first = OutputId::new(61);
+    let second = OutputId::new(62);
+    let first_name = OutputName::new("SYNTH-OUTPUT-1").expect("first output");
+    let second_name = OutputName::new("SYNTH-OUTPUT-2").expect("second output");
+    let mut state = AppState::default();
+    state.reconcile_outputs([first, second], [], false);
+    state.bind_outputs([
+        (first, Some(first_name.as_str().to_owned())),
+        (second, Some(second_name.as_str().to_owned())),
+    ]);
+    state.desktop.outputs.insert(
+        first_name.clone(),
+        CompositorOutput {
+            id: 1,
+            name: first_name,
+            focused: false,
+            scale_milli: 1_000,
+            active_workspace: None,
+            fullscreen: false,
+        },
+    );
+    state.desktop.outputs.insert(
+        second_name.clone(),
+        CompositorOutput {
+            id: 2,
+            name: second_name,
+            focused: true,
+            scale_milli: 1_000,
+            active_workspace: None,
+            fullscreen: false,
+        },
+    );
+
+    state.apply_media_update(MediaUpdate::Snapshot {
+        players: vec![player(
+            "focused",
+            MediaPlaybackStatus::Playing,
+            1,
+            controls(),
+        )],
+        observed_millis: 1,
+    });
+
+    let unfocused = state.output_view(first).expect("unfocused output");
+    assert!(unfocused.activity.is_empty());
+    assert!(unfocused.ribbon_context_label.is_empty());
+    assert!(unfocused.candidate_actions.is_empty());
+    assert!(state.selected_media_player(first).is_none());
+
+    let focused = state.output_view(second).expect("focused output");
+    assert_eq!(focused.activity.len(), 1);
+    assert!(focused.ribbon_context_label.contains("Synthetic title"));
+    assert!(state.selected_media_player(second).is_some());
 }
 
 #[test]

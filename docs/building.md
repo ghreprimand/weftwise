@@ -24,7 +24,9 @@ The selected audio boundary links the upstream PipeWire Rust binding to
 separate development package, while `clang` supplies `libclang` for the
 binding's generated native declarations. WirePlumber remains the runtime policy owner;
 Weftwise uses PipeWire metadata and graph APIs rather than linking a
-WirePlumber Rust binding or polling `wpctl`.
+WirePlumber Rust binding or polling `wpctl`. The native audio transport is a
+default feature. `cargo build --no-default-features` is supported for bounded
+transport-free development, but it cannot observe or control live audio.
 
 ## Rust dependency baseline
 

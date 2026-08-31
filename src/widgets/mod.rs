@@ -90,6 +90,7 @@ impl TopEdgeWidgets {
         window: &gtk::ApplicationWindow,
         output: OutputId,
         immediate_corner: Rc<Cell<bool>>,
+        corner_width: Rc<Cell<i32>>,
         emit: Rc<dyn Fn(AppAction)>,
     ) -> Self {
         let root = gtk::Overlay::builder()
@@ -273,13 +274,24 @@ impl TopEdgeWidgets {
         let motion = gtk::EventControllerMotion::new();
         motion.set_propagation_phase(gtk::PropagationPhase::Capture);
         let enter_emit = emit.clone();
-        motion.connect_enter(move |_, _, _| {
+        motion.connect_enter(move |controller, x, _| {
             tracing::debug!(output = ?output, "pointer entered native surface");
-            enter_emit(if immediate_corner.get() {
-                AppAction::PointerEnteredImmediate(output)
-            } else {
-                AppAction::PointerEntered(output)
-            });
+            let surface_width = controller
+                .widget()
+                .map(|widget| widget.width())
+                .unwrap_or_default();
+            enter_emit(
+                if pointer_entry_is_immediate(
+                    immediate_corner.get(),
+                    corner_width.get(),
+                    surface_width,
+                    x,
+                ) {
+                    AppAction::PointerEnteredImmediate(output)
+                } else {
+                    AppAction::PointerEntered(output)
+                },
+            );
         });
         motion.connect_leave(move |_| {
             tracing::debug!(output = ?output, "pointer left native surface");
@@ -374,6 +386,22 @@ impl TopEdgeWidgets {
     }
 }
 
+fn pointer_entry_is_immediate(
+    topology_immediate: bool,
+    corner_width: i32,
+    surface_width: i32,
+    x: f64,
+) -> bool {
+    if topology_immediate {
+        return true;
+    }
+    if corner_width <= 0 || surface_width <= 1 || !x.is_finite() {
+        return false;
+    }
+    let corner_width = corner_width.min(surface_width).max(0);
+    x < f64::from(corner_width) || x >= f64::from(surface_width.saturating_sub(corner_width))
+}
+
 fn workspace_mark(workspace: &WorkspaceMark) -> gtk::Label {
     let mark = gtk::Label::builder()
         .label(&workspace.accessible_label)
@@ -434,5 +462,18 @@ fn add_mark_semantics(mark: &impl IsA<gtk::Widget>, shape: MarkShape, pattern: M
         MarkPattern::Outline => mark.add_css_class("pattern-outline"),
         MarkPattern::Solid => mark.add_css_class("pattern-solid"),
         MarkPattern::Striped => mark.add_css_class("pattern-striped"),
+    }
+}
+
+#[cfg(test)]
+mod pointer_entry_tests {
+    use super::pointer_entry_is_immediate;
+
+    #[test]
+    fn either_corner_leg_reveals_immediately_while_the_top_island_keeps_dwell() {
+        assert!(pointer_entry_is_immediate(false, 12, 1_920, 1.0));
+        assert!(pointer_entry_is_immediate(false, 12, 1_920, 1_919.0));
+        assert!(!pointer_entry_is_immediate(false, 12, 1_920, 960.0));
+        assert!(pointer_entry_is_immediate(true, 12, 1_920, 960.0));
     }
 }

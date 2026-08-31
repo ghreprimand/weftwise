@@ -145,7 +145,7 @@ pub struct ActivationRegion {
     pub width: i32,
     /// Bounded island height.
     pub height: i32,
-    /// Reveal on entry because every adjoining entry edge is internal to the layout.
+    /// Reveal on every bounded entry because all adjoining edges are internal.
     pub immediate: bool,
 }
 
@@ -263,6 +263,7 @@ pub(crate) struct ManagedSurface {
     level: Rc<Cell<PresentationLevel>>,
     activation: Rc<Cell<ActivationRegion>>,
     immediate_corner: Rc<Cell<bool>>,
+    corner_width: Rc<Cell<i32>>,
     monitor_handler: Option<glib::SignalHandlerId>,
 }
 
@@ -297,7 +298,14 @@ impl ManagedSurface {
         window.set_keyboard_mode(KeyboardMode::None);
 
         let immediate_corner = Rc::new(Cell::new(activation.immediate));
-        let widgets = TopEdgeWidgets::new(&window, id, immediate_corner.clone(), action_sink);
+        let corner_width = Rc::new(Cell::new(activation.height));
+        let widgets = TopEdgeWidgets::new(
+            &window,
+            id,
+            immediate_corner.clone(),
+            corner_width.clone(),
+            action_sink,
+        );
         window.set_child(Some(&widgets.root));
 
         let level = Rc::new(Cell::new(PresentationLevel::Selvage));
@@ -348,6 +356,7 @@ impl ManagedSurface {
             level,
             activation,
             immediate_corner,
+            corner_width,
             monitor_handler: Some(monitor_handler),
         }
     }
@@ -368,6 +377,7 @@ impl ManagedSurface {
     pub fn set_activation_region(&self, activation: ActivationRegion) {
         self.activation.set(activation);
         self.immediate_corner.set(activation.immediate);
+        self.corner_width.set(activation.height);
         self.refresh_input_region(self.level.get());
     }
 
@@ -573,7 +583,7 @@ mod tests {
     }
 
     #[test]
-    fn fully_internal_corner_uses_immediate_entry_with_fractional_rounding_tolerance() {
+    fn fully_internal_activation_uses_immediate_entry_with_fractional_rounding_tolerance() {
         let target = OutputRectangle {
             x: 100,
             y: 101,
@@ -607,7 +617,7 @@ mod tests {
     }
 
     #[test]
-    fn either_physical_corner_keeps_dwell_when_the_top_edge_is_internal() {
+    fn a_physical_side_keeps_top_island_dwell_when_the_top_edge_is_internal() {
         let target = OutputRectangle {
             x: 100,
             y: 100,
@@ -637,7 +647,7 @@ mod tests {
     }
 
     #[test]
-    fn physical_edge_keeps_dwell_even_when_the_top_edge_is_internal() {
+    fn physical_top_segment_keeps_top_island_dwell() {
         let target = OutputRectangle {
             x: 100,
             y: 100,

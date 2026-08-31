@@ -217,8 +217,9 @@ new stream or sink. The selection rules, exact class match, subject and metadata
 permission gates, tri-state policy parsing, generation freshness check, and
 target value builder are verified by unit tests; the live relink against a
 running WirePlumber remains unmeasured here. The adapter and its optional
-`pipewire` dependency compile only with the
-`audio-transport` feature; the pure domain and typed contracts build without it.
+`pipewire` dependency compile with the `audio-transport` feature, which is
+enabled by default on the supported native baseline. A transport-free
+`--no-default-features` build retains the pure domain and typed contracts.
 The transport for this adapter lives in a dedicated `audio/transport.rs` module
 so the always-compiled pure model stays well under the file-size limits.
 
