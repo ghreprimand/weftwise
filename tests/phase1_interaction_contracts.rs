@@ -109,12 +109,45 @@ fn second_keyboard_tap_pins_only_the_ribbon_until_focus_is_lost() {
     assert!(state.ribbon_pinned());
     assert_eq!(state.update(InteractionInput::PointerLeft), []);
     assert_eq!(state.level(), PresentationLevel::Ribbon);
-    assert_eq!(
-        state.update(InteractionInput::FocusLost),
-        [InteractionEffect::Render]
-    );
+    let effects = state.update(InteractionInput::FocusLost);
+    let [
+        InteractionEffect::Render,
+        InteractionEffect::ScheduleDismissalGuard(_),
+    ] = effects.as_slice()
+    else {
+        panic!("expected render plus click-away guard, got {effects:?}");
+    };
     assert_eq!(state.level(), PresentationLevel::Selvage);
     assert!(!state.ribbon_pinned());
+}
+
+#[test]
+fn click_away_absorbs_synthetic_pointer_reentry_before_rearming() {
+    let mut state = OutputPresentation::new(false);
+    state.update(InteractionInput::PinRibbon);
+    let effects = state.update(InteractionInput::FocusLost);
+    let [
+        InteractionEffect::Render,
+        InteractionEffect::ScheduleDismissalGuard(guard),
+    ] = effects.as_slice()
+    else {
+        panic!("expected render plus click-away guard, got {effects:?}");
+    };
+
+    assert_eq!(state.update(InteractionInput::PointerEnteredImmediate), []);
+    assert_eq!(state.level(), PresentationLevel::Selvage);
+    assert_eq!(
+        state.update(InteractionInput::DismissalGuardElapsed(*guard)),
+        []
+    );
+    assert_eq!(state.level(), PresentationLevel::Selvage);
+
+    assert_eq!(state.update(InteractionInput::PointerLeft), []);
+    assert_eq!(
+        state.update(InteractionInput::PointerEnteredImmediate),
+        [InteractionEffect::Render]
+    );
+    assert_eq!(state.level(), PresentationLevel::Ribbon);
 }
 
 #[test]

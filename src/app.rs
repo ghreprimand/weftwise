@@ -23,8 +23,8 @@ use crate::services::{activity, clock, hyprland, logind};
 use crate::shell::outputs::{OutputChanges, ShellEvent, SurfaceError, SurfaceManager};
 use crate::shell::{ProofOptionError, ProofOptions};
 use crate::state::{
-    AppState, DISMISS_DELAY, DWELL_DELAY, GLANCE_DISMISS_DELAY, InteractionEffect,
-    InteractionInput, InteractionToken, OutputId,
+    AppState, CLICK_AWAY_REARM_DELAY, DISMISS_DELAY, DWELL_DELAY, GLANCE_DISMISS_DELAY,
+    InteractionEffect, InteractionInput, InteractionToken, OutputId,
 };
 use crate::supervisor::{RuntimeConfigurationError, Supervisor, configure_relm_runtime};
 
@@ -479,6 +479,7 @@ impl AppModel {
         let input = match kind {
             TimerKind::Dwell => InteractionInput::DwellElapsed(token),
             TimerKind::Dismiss => InteractionInput::DismissElapsed(token),
+            TimerKind::Rearm => InteractionInput::DismissalGuardElapsed(token),
         };
         self.apply_interaction(output, input, sender);
     }
@@ -514,6 +515,13 @@ impl AppModel {
                     TimerKind::Dismiss,
                     token,
                     GLANCE_DISMISS_DELAY,
+                    sender.input_sender().clone(),
+                ),
+                InteractionEffect::ScheduleDismissalGuard(token) => self.timers.schedule(
+                    output,
+                    TimerKind::Rearm,
+                    token,
+                    CLICK_AWAY_REARM_DELAY,
                     sender.input_sender().clone(),
                 ),
                 InteractionEffect::Render => self.render(output),

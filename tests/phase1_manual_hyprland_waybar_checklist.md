@@ -20,7 +20,7 @@ surface at the physical top edge. The other rows remain independent checks.
 | Waybar coexistence | Waybar remains visible and usable with no duplicate reserved work area. | Do not record Waybar configuration. |
 | Collapsed geometry | The Selvage is 2-3 pixels high; pointer events below it pass through. | Do not record application names. |
 | Dwell reveal | Holding at the top edge reveals the Ribbon after the configured delay. | Record configured delay only if synthetic/default. |
-| Keyboard glance | The configured Hyprland binding reveals the Ribbon on the focused output, auto-dismisses, and does not open the Panel. | Record the symbolic binding and pass/fail only. |
+| Keyboard glance | One configured Hyprland binding press reveals the focused Ribbon temporarily; two presses pin only the Ribbon, and an outside click collapses it without dwell reopening. | Record the symbolic binding and pass/fail only. |
 | Dismissal | Leaving the Ribbon collapses it after its delay; rapid re-entry cancels dismissal. | Pass/fail only. |
 | Panel | Clicking the revealed Ribbon opens the Panel on that output. | Do not record focused client identity. |
 | Keyboard | Tab navigation works; Escape dismisses the Panel and focus returns to the prior client. | Pass/fail only. |

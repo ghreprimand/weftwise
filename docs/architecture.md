@@ -266,7 +266,9 @@ opening the Panel. An invisible attached GTK autohide guard owns native
 outside-click dismissal while pinned. Its transparent focusable child retains
 the GTK grab, and guard closure emits a focus-loss action. Pointer entry also
 invalidates an ordinary glance dismissal generation and returns ownership to
-the interaction reducer.
+the interaction reducer. Guard closure temporarily disarms pointer reveal so a
+GTK grab-release re-entry cannot schedule dwell and reopen the dismissed
+Ribbon; leaving the surface or a bounded settling timer rearms it.
 Hyprland remains the global shortcut owner, so key selection is configuration
 rather than a GTK grab.
 

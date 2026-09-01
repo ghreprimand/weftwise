@@ -22,15 +22,22 @@ original 500-millisecond recognition window was too narrow once two compositor
 remains below the 2.5-second single-glance lifetime while accommodating that
 transport overhead.
 
+Closing GTK's outside-click grab can synthesize pointer re-entry on the Ribbon
+underneath. Root interaction state now disarms pointer reveal for 500
+milliseconds after click-away dismissal. A synthetic entry during that guard is
+absorbed until the pointer leaves, preventing the ordinary dwell transition
+from reopening and pinning the dismissed Ribbon.
+
 The Panel no longer presents proof placeholders. It projects the focused
 output's default PipeWire sink as capability-gated ten-percentage-point volume
 steps and a mute toggle, alongside any advertised media controls. Requests are
 validated by root state and sent through the bounded typed audio command
 channel; device identity remains outside the UI and logs.
 
-Deterministic coverage includes Ribbon pin/focus-loss transitions, Panel
-separation, focused-output audio projection, and cubic display-volume command
-conversion. The complete default gate passed with 132 runnable library tests
+Deterministic coverage includes Ribbon pin/focus-loss transitions, click-away
+re-entry suppression, Panel separation, focused-output audio projection, and
+cubic display-volume command conversion. The complete default gate passed with
+132 runnable library tests
 and one explicitly ignored live-system-bus test; the transport-free gate passed
 131 with the same ignore. All integration suites, warnings-denied Clippy,
 documentation, file-size and dependency-topology checks, RustSec across 172

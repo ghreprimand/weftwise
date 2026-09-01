@@ -78,7 +78,9 @@ pointer entry cancels that timeout and resumes normal pointer-owned behavior.
 A second invocation within 1500 milliseconds pins only the Ribbon. The Ribbon
 stays visible across pointer departure and collapses when another surface takes
 the native outside-click grab. Clicking the Ribbon remains the explicit route
-to the Panel. Weftwise does not install a GTK global shortcut.
+to the Panel. Grab-release pointer re-entry is suppressed until it settles or
+the pointer leaves, so click-away cannot immediately reveal the Ribbon again.
+Weftwise does not install a GTK global shortcut.
 
 ### Panel
 
