@@ -75,7 +75,7 @@ change system state.
 The recommended compositor binding is `Super+grave`, but Hyprland owns the key
 choice. The parameter-free remote action reveals the Ribbon for 2.5 seconds;
 pointer entry cancels that timeout and resumes normal pointer-owned behavior.
-A second invocation within 500 milliseconds pins only the Ribbon. The Ribbon
+A second invocation within 1500 milliseconds pins only the Ribbon. The Ribbon
 stays visible across pointer departure and collapses when another surface takes
 the native outside-click grab. Clicking the Ribbon remains the explicit route
 to the Panel. Weftwise does not install a GTK global shortcut.

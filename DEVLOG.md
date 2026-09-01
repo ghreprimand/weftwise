@@ -8,7 +8,7 @@ or unmeasured. Planned work is never presented as implemented behavior.
 
 ## 2026-09-01 - Separate Ribbon pinning from Panel controls
 
-Two `weftwise reveal` requests within 500 milliseconds now pin only the Ribbon
+Two `weftwise reveal` requests within 1500 milliseconds now pin only the Ribbon
 on the focused output. The keyboard pin has its own root-owned state, ignores
 pointer-leave timers, and uses an invisible GTK autohide guard for native
 outside-click dismissal. It no longer opens or reopens the Panel popover. An
@@ -16,7 +16,11 @@ initial layer-window active-state observer proved unsuitable because an
 on-demand layer surface does not acquire compositor focus programmatically;
 the guard replaced it after native testing. The guard contains a focusable,
 one-logical-pixel transparent child so GTK retains the outside-click grab rather
-than closing it immediately.
+than closing it immediately. Native key-binding delivery also showed that the
+original 500-millisecond recognition window was too narrow once two compositor
+`exec` launches and session-bus activation were included; 1500 milliseconds
+remains below the 2.5-second single-glance lifetime while accommodating that
+transport overhead.
 
 The Panel no longer presents proof placeholders. It projects the focused
 output's default PipeWire sink as capability-gated ten-percentage-point volume

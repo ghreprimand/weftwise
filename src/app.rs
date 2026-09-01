@@ -28,7 +28,7 @@ use crate::state::{
 };
 use crate::supervisor::{RuntimeConfigurationError, Supervisor, configure_relm_runtime};
 
-const REVEAL_DOUBLE_TAP_WINDOW: Duration = Duration::from_millis(500);
+const REVEAL_DOUBLE_TAP_WINDOW: Duration = Duration::from_millis(1_500);
 
 /// Errors that prevent the application from starting.
 #[derive(Debug, Error)]
@@ -631,8 +631,8 @@ mod reveal_tap_tests {
         let mut tracker = RevealTapTracker::default();
 
         assert!(!tracker.register(start));
-        assert!(tracker.register(start + Duration::from_millis(400)));
-        assert!(!tracker.register(start + Duration::from_millis(450)));
+        assert!(tracker.register(start + Duration::from_millis(1_100)));
+        assert!(!tracker.register(start + Duration::from_millis(1_150)));
     }
 
     #[test]
@@ -641,8 +641,8 @@ mod reveal_tap_tests {
         let mut tracker = RevealTapTracker::default();
 
         assert!(!tracker.register(start));
-        assert!(!tracker.register(start + Duration::from_millis(501)));
-        assert!(tracker.register(start + Duration::from_millis(1_000)));
+        assert!(!tracker.register(start + Duration::from_millis(1_501)));
+        assert!(tracker.register(start + Duration::from_millis(3_000)));
     }
 }
 

@@ -260,7 +260,7 @@ The separate `weftwise reveal` command uses GApplication's session-bus remote
 action mechanism rather than the activity schema. The primary GTK application
 exports a parameter-free action and maps it to a root message. Root state
 selects the Hyprland-focused output and applies a generation-checked 2.5-second
-Ribbon glance. A second request within 500 milliseconds applies a distinct
+Ribbon glance. A second request within 1500 milliseconds applies a distinct
 typed Ribbon-pin transition and invalidates the glance dismissal without
 opening the Panel. An invisible attached GTK autohide guard owns native
 outside-click dismissal while pinned. Its transparent focusable child retains
