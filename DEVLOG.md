@@ -14,7 +14,9 @@ pointer-leave timers, and uses an invisible GTK autohide guard for native
 outside-click dismissal. It no longer opens or reopens the Panel popover. An
 initial layer-window active-state observer proved unsuitable because an
 on-demand layer surface does not acquire compositor focus programmatically;
-the guard replaced it after native testing.
+the guard replaced it after native testing. The guard contains a focusable,
+one-logical-pixel transparent child so GTK retains the outside-click grab rather
+than closing it immediately.
 
 The Panel no longer presents proof placeholders. It projects the focused
 output's default PipeWire sink as capability-gated ten-percentage-point volume

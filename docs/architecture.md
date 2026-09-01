@@ -263,9 +263,10 @@ selects the Hyprland-focused output and applies a generation-checked 2.5-second
 Ribbon glance. A second request within 500 milliseconds applies a distinct
 typed Ribbon-pin transition and invalidates the glance dismissal without
 opening the Panel. An invisible attached GTK autohide guard owns native
-outside-click dismissal while pinned and emits a focus-loss action when it
-closes. Pointer entry also invalidates an ordinary glance dismissal generation
-and returns ownership to the interaction reducer.
+outside-click dismissal while pinned. Its transparent focusable child retains
+the GTK grab, and guard closure emits a focus-loss action. Pointer entry also
+invalidates an ordinary glance dismissal generation and returns ownership to
+the interaction reducer.
 Hyprland remains the global shortcut owner, so key selection is configuration
 rather than a GTK grab.
 

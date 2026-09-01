@@ -72,7 +72,6 @@ pub(crate) struct TopEdgeWidgets {
     /// Root overlay assigned to the layer window.
     pub root: gtk::Overlay,
     revealer: gtk::Revealer,
-    ribbon_button: gtk::Button,
     ribbon_focus_owned: Cell<bool>,
     ribbon_navigation_label: gtk::Label,
     ribbon_context_label: gtk::Label,
@@ -82,6 +81,7 @@ pub(crate) struct TopEdgeWidgets {
     activity_marks: gtk::Box,
     attention_marks: gtk::Box,
     pin_guard: gtk::Popover,
+    pin_guard_focus: gtk::Box,
     popover: gtk::Popover,
     first_panel_action: gtk::Button,
     close_button: gtk::Button,
@@ -195,17 +195,20 @@ impl TopEdgeWidgets {
         let pin_guard_child = gtk::Box::builder()
             .width_request(1)
             .height_request(1)
+            .focusable(true)
+            .accessible_role(gtk::AccessibleRole::Generic)
             .build();
         let pin_guard = gtk::Popover::builder()
             .autohide(true)
             .has_arrow(false)
-            .focusable(false)
+            .focusable(true)
             .child(&pin_guard_child)
             .build();
         pin_guard.set_opacity(0.0);
         pin_guard.set_parent(&ribbon_button);
         let pin_guard_emit = emit.clone();
         pin_guard.connect_closed(move |_| {
+            tracing::debug!(output = ?output, "keyboard Ribbon pin guard closed");
             pin_guard_emit(AppAction::FocusLost(output));
         });
 
@@ -357,7 +360,6 @@ impl TopEdgeWidgets {
         Self {
             root,
             revealer,
-            ribbon_button,
             ribbon_focus_owned: Cell::new(false),
             ribbon_navigation_label,
             ribbon_context_label,
@@ -367,6 +369,7 @@ impl TopEdgeWidgets {
             activity_marks,
             attention_marks,
             pin_guard,
+            pin_guard_focus: pin_guard_child,
             popover,
             first_panel_action,
             close_button,
@@ -466,7 +469,7 @@ impl TopEdgeWidgets {
             window.set_keyboard_mode(KeyboardMode::OnDemand);
             if !self.ribbon_focus_owned.replace(true) {
                 self.pin_guard.popup();
-                self.ribbon_button.grab_focus();
+                self.pin_guard_focus.grab_focus();
             }
             if self.popover.is_visible() {
                 self.popover.popdown();
