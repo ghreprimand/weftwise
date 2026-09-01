@@ -6,14 +6,36 @@ or unmeasured. Planned work is never presented as implemented behavior.
 
 ---
 
+## 2026-09-01 - Separate Ribbon pinning from Panel controls
+
+Two `weftwise reveal` requests within 500 milliseconds now pin only the Ribbon
+on the focused output. The keyboard pin has its own root-owned state, ignores
+pointer-leave timers, requests on-demand focus once, and collapses when the
+layer surface loses focus. It no longer opens or reopens the Panel popover.
+
+The Panel no longer presents proof placeholders. It projects the focused
+output's default PipeWire sink as capability-gated ten-percentage-point volume
+steps and a mute toggle, alongside any advertised media controls. Requests are
+validated by root state and sent through the bounded typed audio command
+channel; device identity remains outside the UI and logs.
+
+Deterministic coverage includes Ribbon pin/focus-loss transitions, Panel
+separation, focused-output audio projection, and cubic display-volume command
+conversion. The complete default gate passed with 132 runnable library tests
+and one explicitly ignored live-system-bus test; the transport-free gate passed
+131 with the same ignore. All integration suites, warnings-denied Clippy,
+documentation, file-size and dependency-topology checks, RustSec across 172
+dependencies, and worktree public-safety passed. Native click-away, volume, and
+mute acceptance remain open.
+
 ## 2026-08-31 - Add double-tap keyboard pinning
 
-Two `weftwise reveal` requests received within 500 milliseconds now promote the
-focused-output keyboard glance into the existing pinned Panel state. A single
-request retains the 2.5-second Ribbon glance. The second request uses the same
-typed Panel-open transition as clicking the Ribbon, so outside click, Escape,
-focus handling, and generation-checked timer invalidation retain one ownership
-path. Hyprland continues to own the configurable global key binding.
+Two `weftwise reveal` requests received within 500 milliseconds initially
+promoted the focused-output keyboard glance into the Panel state. Native
+follow-up showed that this conflated a requested Ribbon pin with the early Panel
+popover and could reopen after dismissal. The subsequent 2026-09-01 landing
+separates those states. A single request retains the 2.5-second Ribbon glance,
+and Hyprland continues to own the configurable global key binding.
 
 Deterministic tests cover taps inside and outside the recognition window and
 the glance-to-Panel reducer transition. The complete host gate passed with 130

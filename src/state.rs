@@ -699,8 +699,23 @@ pub struct OutputView {
     pub ribbon_accessible_label: String,
     /// Typed actions advertised by the selected candidate.
     pub candidate_actions: Vec<CandidateAction>,
+    /// Capability-gated controls for the focused output's default audio sink.
+    pub audio: Option<AudioControlProjection>,
     /// Whether the matched compositor output is focused.
     pub focused: bool,
+}
+
+/// Immutable default-sink controls exposed only on the focused output.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AudioControlProjection {
+    /// Conventional cubic display percentage.
+    pub percent: u16,
+    /// Whether the sink is muted.
+    pub muted: bool,
+    /// Whether volume changes are currently supported.
+    pub can_set_volume: bool,
+    /// Whether mute changes are currently supported.
+    pub can_set_mute: bool,
 }
 
 /// Visible top-edge presentation level.
@@ -730,6 +745,10 @@ pub enum InteractionInput {
     PointerLeft,
     /// A compositor key binding requested a bounded Ribbon glance.
     RevealForGlance,
+    /// A repeated compositor key binding pinned the Ribbon without opening the Panel.
+    PinRibbon,
+    /// The keyboard-pinned Ribbon lost application focus.
+    FocusLost,
     /// A previously scheduled dwell timer completed.
     DwellElapsed(InteractionToken),
     /// A previously scheduled dismissal timer completed.
@@ -760,6 +779,7 @@ pub enum InteractionEffect {
 pub struct OutputPresentation {
     level: PresentationLevel,
     pointer_inside: bool,
+    ribbon_pinned: bool,
     reduced_motion: bool,
     generation: u64,
 }
@@ -771,6 +791,7 @@ impl OutputPresentation {
         Self {
             level: PresentationLevel::Selvage,
             pointer_inside: false,
+            ribbon_pinned: false,
             reduced_motion,
             generation: 0,
         }
@@ -794,6 +815,12 @@ impl OutputPresentation {
         self.pointer_inside
     }
 
+    /// Whether the visible Ribbon is held by an explicit keyboard pin.
+    #[must_use]
+    pub const fn ribbon_pinned(&self) -> bool {
+        self.ribbon_pinned
+    }
+
     /// Apply one deterministic input and return required side effects.
     pub fn update(&mut self, input: InteractionInput) -> Vec<InteractionEffect> {
         match input {
@@ -801,6 +828,8 @@ impl OutputPresentation {
             InteractionInput::PointerEnteredImmediate => self.pointer_entered_immediate(),
             InteractionInput::PointerLeft => self.pointer_left(),
             InteractionInput::RevealForGlance => self.reveal_for_glance(),
+            InteractionInput::PinRibbon => self.pin_ribbon(),
+            InteractionInput::FocusLost => self.focus_lost(),
             InteractionInput::DwellElapsed(token) => self.dwell_elapsed(token),
             InteractionInput::DismissElapsed(token) => self.dismiss_elapsed(token),
             InteractionInput::OpenPanel => self.open_panel(),
@@ -833,7 +862,7 @@ impl OutputPresentation {
     fn pointer_left(&mut self) -> Vec<InteractionEffect> {
         self.pointer_inside = false;
         let token = self.next_token();
-        if self.level == PresentationLevel::Ribbon {
+        if self.level == PresentationLevel::Ribbon && !self.ribbon_pinned {
             vec![InteractionEffect::ScheduleDismiss(token)]
         } else {
             Vec::new()
@@ -841,7 +870,7 @@ impl OutputPresentation {
     }
 
     fn reveal_for_glance(&mut self) -> Vec<InteractionEffect> {
-        if self.level == PresentationLevel::Panel {
+        if self.level == PresentationLevel::Panel || self.ribbon_pinned {
             return Vec::new();
         }
         self.pointer_inside = false;
@@ -853,6 +882,28 @@ impl OutputPresentation {
         }
         effects.push(InteractionEffect::ScheduleGlanceDismiss(token));
         effects
+    }
+
+    fn pin_ribbon(&mut self) -> Vec<InteractionEffect> {
+        if self.level == PresentationLevel::Panel || self.ribbon_pinned {
+            return Vec::new();
+        }
+        self.pointer_inside = false;
+        self.ribbon_pinned = true;
+        self.next_token();
+        self.level = PresentationLevel::Ribbon;
+        vec![InteractionEffect::Render]
+    }
+
+    fn focus_lost(&mut self) -> Vec<InteractionEffect> {
+        if !self.ribbon_pinned {
+            return Vec::new();
+        }
+        self.pointer_inside = false;
+        self.ribbon_pinned = false;
+        self.next_token();
+        self.level = PresentationLevel::Selvage;
+        vec![InteractionEffect::Render]
     }
 
     fn dwell_elapsed(&mut self, token: InteractionToken) -> Vec<InteractionEffect> {
@@ -878,6 +929,7 @@ impl OutputPresentation {
     fn open_panel(&mut self) -> Vec<InteractionEffect> {
         if self.level == PresentationLevel::Ribbon {
             self.next_token();
+            self.ribbon_pinned = false;
             self.level = PresentationLevel::Panel;
             vec![InteractionEffect::Render]
         } else {
@@ -1161,6 +1213,18 @@ impl AppState {
             candidate_actions: detailed_candidate
                 .map(|projection| projection.actions.clone())
                 .unwrap_or_default(),
+            audio: focused
+                .then(|| {
+                    self.audio
+                        .default_sink()
+                        .map(|sink| AudioControlProjection {
+                            percent: sink.volume.cubic_percent(),
+                            muted: sink.muted,
+                            can_set_volume: sink.capabilities.can_set_volume,
+                            can_set_mute: sink.capabilities.can_set_mute,
+                        })
+                })
+                .flatten(),
             focused,
         })
     }
@@ -1617,6 +1681,7 @@ mod tests {
     use crate::context::arbitration::{
         CandidateId, CandidateSource, PreemptionClass, PresentationCandidate,
     };
+    use crate::services::audio::{AudioDirection, AudioNode, AudioNodeId, AudioVolume};
 
     fn scheduled_dwell(state: &mut OutputPresentation) -> InteractionToken {
         let effects = state.update(InteractionInput::PointerEntered);
@@ -1787,5 +1852,69 @@ mod tests {
             vec![CandidateAction::RevealDetails]
         );
         assert_eq!(second.activity.len(), 1);
+    }
+
+    #[test]
+    fn audio_controls_are_projected_only_on_the_focused_output() {
+        let first_id = OutputId::new(1);
+        let second_id = OutputId::new(2);
+        let first_name = OutputName::new("SYNTH-A").expect("output name");
+        let second_name = OutputName::new("SYNTH-B").expect("output name");
+        let mut state = AppState::default();
+        state.reconcile_outputs([first_id, second_id], [], false);
+        state.bind_outputs([
+            (first_id, Some("SYNTH-A".to_owned())),
+            (second_id, Some("SYNTH-B".to_owned())),
+        ]);
+        state.desktop.outputs.insert(
+            first_name.clone(),
+            CompositorOutput {
+                id: 1,
+                name: first_name,
+                focused: false,
+                scale_milli: 1_000,
+                active_workspace: None,
+                fullscreen: false,
+            },
+        );
+        state.desktop.outputs.insert(
+            second_name.clone(),
+            CompositorOutput {
+                id: 2,
+                name: second_name,
+                focused: true,
+                scale_milli: 1_000,
+                active_workspace: None,
+                fullscreen: false,
+            },
+        );
+        let sink = AudioNode::bounded(
+            AudioNodeId::new(7),
+            AudioDirection::Sink,
+            "synthetic-sink",
+            "Synthetic sink",
+            AudioVolume::from_cubic_percent(60),
+            false,
+            true,
+        );
+        state
+            .audio
+            .apply_snapshot(vec![sink], Some(AudioNodeId::new(7)), None);
+
+        assert!(
+            state
+                .output_view(first_id)
+                .expect("first view")
+                .audio
+                .is_none()
+        );
+        let audio = state
+            .output_view(second_id)
+            .expect("second view")
+            .audio
+            .expect("focused audio controls");
+        assert_eq!(audio.percent, 60);
+        assert!(audio.can_set_volume);
+        assert!(audio.can_set_mute);
     }
 }

@@ -95,17 +95,39 @@ fn dismissal_is_cancelled_by_reentry_and_stale_timers_cannot_collapse() {
 }
 
 #[test]
-fn second_keyboard_tap_promotes_the_glance_to_a_pinned_panel() {
+fn second_keyboard_tap_pins_only_the_ribbon_until_focus_is_lost() {
     let mut state = OutputPresentation::new(false);
 
     let effects = state.update(InteractionInput::RevealForGlance);
     assert!(effects.contains(&InteractionEffect::Render));
     assert_eq!(state.level(), PresentationLevel::Ribbon);
     assert_eq!(
+        state.update(InteractionInput::PinRibbon),
+        [InteractionEffect::Render]
+    );
+    assert_eq!(state.level(), PresentationLevel::Ribbon);
+    assert!(state.ribbon_pinned());
+    assert_eq!(state.update(InteractionInput::PointerLeft), []);
+    assert_eq!(state.level(), PresentationLevel::Ribbon);
+    assert_eq!(
+        state.update(InteractionInput::FocusLost),
+        [InteractionEffect::Render]
+    );
+    assert_eq!(state.level(), PresentationLevel::Selvage);
+    assert!(!state.ribbon_pinned());
+}
+
+#[test]
+fn opening_the_panel_explicitly_releases_a_keyboard_ribbon_pin() {
+    let mut state = OutputPresentation::new(false);
+    state.update(InteractionInput::PinRibbon);
+
+    assert_eq!(
         state.update(InteractionInput::OpenPanel),
         [InteractionEffect::Render]
     );
     assert_eq!(state.level(), PresentationLevel::Panel);
+    assert!(!state.ribbon_pinned());
 }
 
 #[test]

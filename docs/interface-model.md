@@ -75,16 +75,18 @@ change system state.
 The recommended compositor binding is `Super+grave`, but Hyprland owns the key
 choice. The parameter-free remote action reveals the Ribbon for 2.5 seconds;
 pointer entry cancels that timeout and resumes normal pointer-owned behavior.
-A second invocation within 500 milliseconds promotes that glance to the pinned
-Panel, matching a pointer click on the Ribbon. Outside click or Escape dismisses
-it. Weftwise does not install a GTK global shortcut.
+A second invocation within 500 milliseconds pins only the Ribbon. The Ribbon
+stays visible across pointer departure and collapses when another surface takes
+focus. Clicking the Ribbon remains the explicit route to the Panel. Weftwise
+does not install a GTK global shortcut.
 
 ### Panel
 
-Clicking the Ribbon opens the proof Panel on that output. The Panel provides
-keyboard navigation; Escape and outside click dismiss it. The proof returns
-layer-shell keyboard interactivity to `None`, while real restoration to the
-prior client remains a native-session acceptance check.
+Clicking the Ribbon opens the Panel on that output. The current Panel exposes
+capability-gated ten-point volume decrease/increase and mute controls for the
+default PipeWire sink on the focused output, followed by supported media
+controls. It provides keyboard navigation; Escape and outside click dismiss it
+and return layer-shell keyboard interactivity to `None`.
 
 Initial Panel destinations are workspace/window navigation, media, calendar,
 audio routing, notifications, clipboard history, system health, and power.

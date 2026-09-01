@@ -72,6 +72,8 @@ pub(crate) struct TopEdgeWidgets {
     /// Root overlay assigned to the layer window.
     pub root: gtk::Overlay,
     revealer: gtk::Revealer,
+    ribbon_button: gtk::Button,
+    ribbon_focus_owned: Cell<bool>,
     ribbon_navigation_label: gtk::Label,
     ribbon_context_label: gtk::Label,
     ribbon_status_label: gtk::Label,
@@ -81,6 +83,12 @@ pub(crate) struct TopEdgeWidgets {
     attention_marks: gtk::Box,
     popover: gtk::Popover,
     first_panel_action: gtk::Button,
+    close_button: gtk::Button,
+    audio_controls: gtk::Box,
+    audio_label: gtk::Label,
+    volume_down: gtk::Button,
+    volume_up: gtk::Button,
+    mute_button: gtk::Button,
     candidate_controls: Vec<(CandidateAction, gtk::Button)>,
 }
 
@@ -190,14 +198,43 @@ impl TopEdgeWidgets {
             .margin_end(12)
             .build();
 
-        let heading = gtk::Label::new(Some("Panel proof"));
+        let heading = gtk::Label::new(Some("Weftwise controls"));
         heading.set_xalign(0.0);
         heading.add_css_class("title-4");
         panel_content.append(&heading);
 
-        let first_panel_action = gtk::Button::with_label("Workspace navigation placeholder");
-        first_panel_action.set_focusable(true);
-        panel_content.append(&first_panel_action);
+        let audio_controls = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(6)
+            .accessible_role(gtk::AccessibleRole::Group)
+            .build();
+        let volume_down = gtk::Button::with_label("Volume -10");
+        volume_down.set_focusable(true);
+        let audio_label = gtk::Label::new(Some("Volume unavailable"));
+        audio_label.set_xalign(0.5);
+        let volume_up = gtk::Button::with_label("Volume +10");
+        volume_up.set_focusable(true);
+        let mute_button = gtk::Button::with_label("Mute");
+        mute_button.set_focusable(true);
+        audio_controls.append(&volume_down);
+        audio_controls.append(&audio_label);
+        audio_controls.append(&volume_up);
+        audio_controls.append(&mute_button);
+        panel_content.append(&audio_controls);
+
+        let first_panel_action = volume_down.clone();
+        let volume_down_emit = emit.clone();
+        volume_down.connect_clicked(move |_| {
+            volume_down_emit(AppAction::AdjustOutputVolume(output, -10));
+        });
+        let volume_up_emit = emit.clone();
+        volume_up.connect_clicked(move |_| {
+            volume_up_emit(AppAction::AdjustOutputVolume(output, 10));
+        });
+        let mute_emit = emit.clone();
+        mute_button.connect_clicked(move |_| {
+            mute_emit(AppAction::ToggleOutputMute(output));
+        });
 
         let media_controls = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
@@ -300,6 +337,8 @@ impl TopEdgeWidgets {
         Self {
             root,
             revealer,
+            ribbon_button,
+            ribbon_focus_owned: Cell::new(false),
             ribbon_navigation_label,
             ribbon_context_label,
             ribbon_status_label,
@@ -309,6 +348,12 @@ impl TopEdgeWidgets {
             attention_marks,
             popover,
             first_panel_action,
+            close_button,
+            audio_controls,
+            audio_label,
+            volume_down,
+            volume_up,
+            mute_button,
             candidate_controls,
         }
     }
@@ -360,15 +405,49 @@ impl TopEdgeWidgets {
         for (action, button) in &self.candidate_controls {
             button.set_visible(view.candidate_actions.contains(action));
         }
+        self.audio_controls.set_visible(view.audio.is_some());
+        if let Some(audio) = view.audio {
+            let label = if audio.muted {
+                "Volume muted".to_owned()
+            } else {
+                format!("Volume {}%", audio.percent)
+            };
+            self.audio_label.set_label(&label);
+            self.volume_down.set_sensitive(audio.can_set_volume);
+            self.volume_up.set_sensitive(audio.can_set_volume);
+            self.mute_button.set_sensitive(audio.can_set_mute);
+            self.mute_button
+                .set_label(if audio.muted { "Unmute" } else { "Mute" });
+        }
 
         if level == PresentationLevel::Panel {
+            self.ribbon_focus_owned.set(false);
             window.set_keyboard_mode(KeyboardMode::OnDemand);
             let opening = !self.popover.is_visible();
             if opening {
                 self.popover.popup();
-                self.first_panel_action.grab_focus();
+                if self.audio_controls.is_visible() {
+                    self.first_panel_action.grab_focus();
+                } else if let Some((_, button)) = self
+                    .candidate_controls
+                    .iter()
+                    .find(|(_, button)| button.is_visible())
+                {
+                    button.grab_focus();
+                } else {
+                    self.close_button.grab_focus();
+                }
+            }
+        } else if view.presentation.ribbon_pinned() {
+            window.set_keyboard_mode(KeyboardMode::OnDemand);
+            if !self.ribbon_focus_owned.replace(true) {
+                self.ribbon_button.grab_focus();
+            }
+            if self.popover.is_visible() {
+                self.popover.popdown();
             }
         } else {
+            self.ribbon_focus_owned.set(false);
             window.set_keyboard_mode(KeyboardMode::None);
             if self.popover.is_visible() {
                 self.popover.popdown();

@@ -337,6 +337,12 @@ impl ManagedSurface {
 
         let immediate_corner = Rc::new(Cell::new(activation.immediate));
         let corner_width = Rc::new(Cell::new(activation.height));
+        let focus_sink = action_sink.clone();
+        window.connect_is_active_notify(move |window| {
+            if !window.is_active() {
+                focus_sink(AppAction::FocusLost(id));
+            }
+        });
         let widgets = TopEdgeWidgets::new(
             &window,
             id,

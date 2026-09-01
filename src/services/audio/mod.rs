@@ -96,6 +96,13 @@ impl AudioVolume {
         }
     }
 
+    /// Construct a volume from a conventional cubic display percentage.
+    #[must_use]
+    pub fn from_cubic_percent(percent: u16) -> Self {
+        let cubic = f32::from(percent) / 100.0;
+        Self::from_linear(cubic * cubic * cubic)
+    }
+
     /// The fixed-point linear value.
     #[must_use]
     pub const fn linear_millis(self) -> u32 {
@@ -1033,6 +1040,20 @@ mod tests {
         // Unity linear maps to 100 percent cubic.
         assert_eq!(AudioVolume::from_linear(1.0).cubic_percent(), 100);
         assert_eq!(AudioVolume::from_linear(0.0).cubic_percent(), 0);
+    }
+
+    #[test]
+    fn cubic_display_percent_round_trips_for_ui_commands() {
+        for percent in [0, 10, 50, 100, 150] {
+            assert_eq!(
+                AudioVolume::from_cubic_percent(percent).cubic_percent(),
+                percent
+            );
+        }
+        assert_eq!(
+            AudioVolume::from_cubic_percent(u16::MAX).linear_millis(),
+            MAX_VOLUME_LINEAR_MILLIS
+        );
     }
 
     #[test]

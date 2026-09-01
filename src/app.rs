@@ -17,7 +17,7 @@ use crate::config::{Config, ConfigLoadError, ConfigPathError, ConfigPaths};
 use crate::context::arbitration::CandidateAction;
 use crate::message::{AppMessage, TimerKind};
 #[cfg(feature = "audio-transport")]
-use crate::services::audio::AudioCommand;
+use crate::services::audio::{AudioCommand, AudioCommandKind, AudioVolume};
 use crate::services::mpris::{self, MediaCommand, MediaCommandKind};
 use crate::services::{activity, clock, hyprland, logind};
 use crate::shell::outputs::{OutputChanges, ShellEvent, SurfaceError, SurfaceManager};
@@ -71,7 +71,7 @@ struct AppModel {
     animation_watch: Option<AnimationPreferenceWatch>,
     media_commands: tokio::sync::mpsc::Sender<MediaCommand>,
     #[cfg(feature = "audio-transport")]
-    _audio_commands: tokio::sync::mpsc::Sender<AudioCommand>,
+    audio_commands: tokio::sync::mpsc::Sender<AudioCommand>,
     shutting_down: bool,
 }
 
@@ -265,7 +265,7 @@ impl SimpleComponent for AppModel {
             animation_watch,
             media_commands,
             #[cfg(feature = "audio-transport")]
-            _audio_commands: audio_commands,
+            audio_commands,
             shutting_down: false,
         };
 
@@ -325,8 +325,23 @@ impl AppModel {
                 (output, InteractionInput::PointerEnteredImmediate)
             }
             AppAction::PointerLeft(output) => (output, InteractionInput::PointerLeft),
+            AppAction::FocusLost(output) => (output, InteractionInput::FocusLost),
             AppAction::OpenPanel(output) => (output, InteractionInput::OpenPanel),
             AppAction::ClosePanel(output) => (output, InteractionInput::ClosePanel),
+            AppAction::AdjustOutputVolume(output, delta) => {
+                #[cfg(feature = "audio-transport")]
+                self.handle_output_volume(output, delta);
+                #[cfg(not(feature = "audio-transport"))]
+                let _ = (output, delta);
+                return;
+            }
+            AppAction::ToggleOutputMute(output) => {
+                #[cfg(feature = "audio-transport")]
+                self.handle_output_mute(output);
+                #[cfg(not(feature = "audio-transport"))]
+                let _ = output;
+                return;
+            }
             AppAction::Candidate(output, action) => {
                 self.handle_candidate_action(output, action);
                 return;
@@ -337,6 +352,51 @@ impl AppModel {
             }
         };
         self.apply_interaction(output, input, sender);
+    }
+
+    #[cfg(feature = "audio-transport")]
+    fn audio_controls_are_advertised(&self, output: OutputId) -> bool {
+        self.state
+            .output_view(output)
+            .is_some_and(|view| view.audio.is_some())
+    }
+
+    #[cfg(feature = "audio-transport")]
+    fn handle_output_volume(&mut self, output: OutputId, delta: i16) {
+        if !self.audio_controls_are_advertised(output) {
+            return;
+        }
+        let Some(sink) = self.state.audio.default_sink() else {
+            return;
+        };
+        let percent = (sink.volume.cubic_percent() as i16 + delta).clamp(0, 150) as u16;
+        let kind = AudioCommandKind::SetVolume {
+            id: sink.id,
+            volume: AudioVolume::from_cubic_percent(percent),
+        };
+        self.dispatch_audio_command(kind);
+    }
+
+    #[cfg(feature = "audio-transport")]
+    fn handle_output_mute(&mut self, output: OutputId) {
+        if !self.audio_controls_are_advertised(output) {
+            return;
+        }
+        let Some(sink) = self.state.audio.default_sink() else {
+            return;
+        };
+        self.dispatch_audio_command(AudioCommandKind::ToggleMute { id: sink.id });
+    }
+
+    #[cfg(feature = "audio-transport")]
+    fn dispatch_audio_command(&mut self, kind: AudioCommandKind) {
+        let (command, outputs) = self.state.audio_command(kind, 0);
+        self.render_outputs(outputs);
+        if let Some(command) = command
+            && self.audio_commands.try_send(command).is_err()
+        {
+            tracing::warn!("audio command queue unavailable or full");
+        }
     }
 
     fn handle_candidate_action(&self, output: OutputId, action: CandidateAction) {
@@ -468,7 +528,7 @@ impl AppModel {
             .or_else(|| self.state.output_ids().next());
         if let Some(output) = output {
             let input = if self.reveal_taps.register(Instant::now()) {
-                InteractionInput::OpenPanel
+                InteractionInput::PinRibbon
             } else {
                 InteractionInput::RevealForGlance
             };

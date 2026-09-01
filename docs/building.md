@@ -116,8 +116,10 @@ bind = SUPER, grave, exec, weftwise reveal
 `weftwise reveal` targets the compositor-focused output, falls back
 deterministically when focus state is unavailable, and dismisses after 2.5
 seconds unless pointer or Panel interaction takes ownership. Two invocations
-within 500 milliseconds open the pinned Panel; outside click or Escape dismisses
-it.
+within 500 milliseconds pin only the Ribbon. It receives on-demand keyboard
+focus and collapses when focus moves to another surface. Clicking the Ribbon
+opens capability-gated audio and media controls in the Panel; outside click or
+Escape dismisses that Panel.
 
 `config/example.toml` contains synthetic values only. Test fixtures must also
 use invented identities, paths, desktop text, metadata, hosts, outputs, and
