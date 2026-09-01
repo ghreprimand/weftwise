@@ -10,8 +10,11 @@ or unmeasured. Planned work is never presented as implemented behavior.
 
 Two `weftwise reveal` requests within 500 milliseconds now pin only the Ribbon
 on the focused output. The keyboard pin has its own root-owned state, ignores
-pointer-leave timers, requests on-demand focus once, and collapses when the
-layer surface loses focus. It no longer opens or reopens the Panel popover.
+pointer-leave timers, and uses an invisible GTK autohide guard for native
+outside-click dismissal. It no longer opens or reopens the Panel popover. An
+initial layer-window active-state observer proved unsuitable because an
+on-demand layer surface does not acquire compositor focus programmatically;
+the guard replaced it after native testing.
 
 The Panel no longer presents proof placeholders. It projects the focused
 output's default PipeWire sink as capability-gated ten-percentage-point volume

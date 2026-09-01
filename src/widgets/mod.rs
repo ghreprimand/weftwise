@@ -81,6 +81,7 @@ pub(crate) struct TopEdgeWidgets {
     navigation_marks: gtk::Box,
     activity_marks: gtk::Box,
     attention_marks: gtk::Box,
+    pin_guard: gtk::Popover,
     popover: gtk::Popover,
     first_panel_action: gtk::Button,
     close_button: gtk::Button,
@@ -188,6 +189,25 @@ impl TopEdgeWidgets {
         selvage.append(&activity_marks);
         selvage.append(&attention_marks);
         root.add_overlay(&selvage);
+
+        // An invisible modal popover supplies GTK's native outside-click
+        // dismissal for a keyboard-pinned Ribbon without presenting Panel UI.
+        let pin_guard_child = gtk::Box::builder()
+            .width_request(1)
+            .height_request(1)
+            .build();
+        let pin_guard = gtk::Popover::builder()
+            .autohide(true)
+            .has_arrow(false)
+            .focusable(false)
+            .child(&pin_guard_child)
+            .build();
+        pin_guard.set_opacity(0.0);
+        pin_guard.set_parent(&ribbon_button);
+        let pin_guard_emit = emit.clone();
+        pin_guard.connect_closed(move |_| {
+            pin_guard_emit(AppAction::FocusLost(output));
+        });
 
         let panel_content = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
@@ -346,6 +366,7 @@ impl TopEdgeWidgets {
             navigation_marks,
             activity_marks,
             attention_marks,
+            pin_guard,
             popover,
             first_panel_action,
             close_button,
@@ -423,6 +444,9 @@ impl TopEdgeWidgets {
         if level == PresentationLevel::Panel {
             self.ribbon_focus_owned.set(false);
             window.set_keyboard_mode(KeyboardMode::OnDemand);
+            if self.pin_guard.is_visible() {
+                self.pin_guard.popdown();
+            }
             let opening = !self.popover.is_visible();
             if opening {
                 self.popover.popup();
@@ -441,6 +465,7 @@ impl TopEdgeWidgets {
         } else if view.presentation.ribbon_pinned() {
             window.set_keyboard_mode(KeyboardMode::OnDemand);
             if !self.ribbon_focus_owned.replace(true) {
+                self.pin_guard.popup();
                 self.ribbon_button.grab_focus();
             }
             if self.popover.is_visible() {
@@ -449,6 +474,9 @@ impl TopEdgeWidgets {
         } else {
             self.ribbon_focus_owned.set(false);
             window.set_keyboard_mode(KeyboardMode::None);
+            if self.pin_guard.is_visible() {
+                self.pin_guard.popdown();
+            }
             if self.popover.is_visible() {
                 self.popover.popdown();
             }
@@ -457,6 +485,9 @@ impl TopEdgeWidgets {
 
     /// Detach the popover before its relative widget is destroyed.
     pub(crate) fn detach(&self) {
+        if self.pin_guard.parent().is_some() {
+            self.pin_guard.unparent();
+        }
         if self.popover.parent().is_some() {
             self.popover.unparent();
         }

@@ -77,8 +77,8 @@ choice. The parameter-free remote action reveals the Ribbon for 2.5 seconds;
 pointer entry cancels that timeout and resumes normal pointer-owned behavior.
 A second invocation within 500 milliseconds pins only the Ribbon. The Ribbon
 stays visible across pointer departure and collapses when another surface takes
-focus. Clicking the Ribbon remains the explicit route to the Panel. Weftwise
-does not install a GTK global shortcut.
+the native outside-click grab. Clicking the Ribbon remains the explicit route
+to the Panel. Weftwise does not install a GTK global shortcut.
 
 ### Panel
 
