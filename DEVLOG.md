@@ -36,8 +36,16 @@ full locked test suite (156 library tests, plus the new `diff_marks`,
 lock-display-affinity, and lost-payload-taint unit tests), documentation
 warnings, the shared-module `audio-transport` feature check, and the worktree
 public-safety scan. Live-session Hyprland recovery and on-screen mark
-reconciliation remain unmeasured here; the hermetic transport harness is a
-separate test task.
+reconciliation remain unmeasured here.
+
+The hermetic transport harness in `tests/phase2_transport_recovery_contracts.rs`
+now drives `run_with_discovery` against synthetic Unix sockets under temporary
+instance directories and covers clean event-socket EOF (reconnect and fresh
+snapshot), a truncated event record (reconnect without panic), socket rotation
+(rescan and snapshot from the new instance), an oversize record discarded ahead
+of a later valid event without a reconnect, and a malformed known event repaired
+with exactly one gap and a same-socket snapshot. These tests are hermetic and do
+not constitute a real-session compositor restart result.
 
 ---
 
