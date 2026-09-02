@@ -262,15 +262,18 @@ exports a parameter-free action and maps it to a root message. Root state
 selects the Hyprland-focused output and applies a generation-checked 2.5-second
 Ribbon glance. A second request within 1500 milliseconds applies a distinct
 typed Ribbon-pin transition and invalidates the glance dismissal without
-opening the Panel. An invisible attached GTK autohide guard owns native
-outside-click dismissal while pinned. Its transparent focusable child retains
-the GTK grab, and guard closure emits a focus-loss action. Pointer entry also
-invalidates an ordinary glance dismissal generation and returns ownership to
-the interaction reducer. Guard closure temporarily disarms pointer reveal so a
-GTK grab-release re-entry cannot schedule dwell and reopen the dismissed
-Ribbon; leaving the surface or a bounded settling timer rearms it.
-Hyprland remains the global shortcut owner, so key selection is configuration
-rather than a GTK grab.
+opening the Panel. A pinned Ribbon has no click-away guard: it is collapsed
+only by a further `reveal` request, which the reducer maps to an `UnpinRibbon`
+transition. The remote handler treats a pinned Ribbon or an open Panel as
+held-open and sends `UnpinRibbon` on the next request, so the shortcut toggles
+the surface closed rather than re-pinning it. Pointer entry still invalidates an
+ordinary glance dismissal generation and returns ownership to the interaction
+reducer. Because there is no focus-grab surface, no invisible popover, and no
+rearm timer, an ordinary click never steals focus from the client beneath the
+Ribbon, and the pin state is described entirely by the reducer. The keyboard pin
+survives a Panel round-trip: opening the Panel preserves the pin and closing it
+restores the pinned Ribbon. Hyprland remains the global shortcut owner, so key
+selection is configuration rather than a GTK grab.
 
 ## Temporary feedback
 

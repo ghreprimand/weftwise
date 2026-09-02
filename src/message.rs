@@ -16,8 +16,6 @@ pub enum TimerKind {
     Dwell,
     /// Ribbon dismissal timer.
     Dismiss,
-    /// Pointer-reveal rearm after native outside-click dismissal.
-    Rearm,
 }
 
 /// Messages accepted by the root component.

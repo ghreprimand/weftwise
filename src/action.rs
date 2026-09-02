@@ -12,8 +12,6 @@ pub enum AppAction {
     PointerEnteredImmediate(OutputId),
     /// Pointer left an output's currently active region.
     PointerLeft(OutputId),
-    /// The keyboard-pinned Ribbon lost application focus.
-    FocusLost(OutputId),
     /// Explicitly open the Panel on an output whose Ribbon is visible.
     OpenPanel(OutputId),
     /// Close the Panel after Escape, outside click, or an explicit request.
@@ -24,6 +22,4 @@ pub enum AppAction {
     ToggleOutputMute(OutputId),
     /// Invoke an action advertised by the selected presentation candidate.
     Candidate(OutputId, CandidateAction),
-    /// Request an orderly application shutdown.
-    Quit,
 }

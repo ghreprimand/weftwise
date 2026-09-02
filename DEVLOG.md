@@ -6,6 +6,33 @@ or unmeasured. Planned work is never presented as implemented behavior.
 
 ---
 
+## 2026-09-02 - Replace Ribbon pin click-away with a shortcut toggle
+
+A keyboard-pinned Ribbon no longer uses native outside-click dismissal. The
+invisible pin-guard popover, the grab-release re-entry suppression state, and
+the paired rearm timer are removed. A pinned Ribbon now stays visible until the
+reveal shortcut is pressed again, which acts as an explicit toggle: the first
+tap glances, a second tap within the pairing window pins, and any later tap
+while pinned or while the Panel is open collapses straight to the Selvage. The
+reducer gains an `UnpinRibbon` input and an `is_pinned` accessor; the removed
+`FocusLost` and `DismissalGuardElapsed` inputs, the `ScheduleDismissalGuard`
+effect, the `TimerKind::Rearm` timer, and the dead `AppAction::Quit` variant
+are deleted. The keyboard pin now survives a Panel round-trip: opening the Panel
+keeps the pin and closing it restores the pinned Ribbon rather than collapsing.
+
+This change removes the trigger for a `gtk_widget_is_ancestor` critical that was
+observed firing from the pin-guard popover during a keyboard pin. The operator
+selected the no-click-away toggle model; the trade-off is that a pinned Ribbon
+is dismissed only by the shortcut (or by opening and toggling), not by clicking
+elsewhere. The decision and its rationale are recorded in
+`docs/interface-model.md`.
+
+The default and transport-free gates pass, including the new pin-toggle reducer
+contracts (glance/pin/toggle-off, unpin rearms only normal dwell, pin survives
+the Panel round-trip, output removal while pinned or in Panel, and stale-timer
+invalidation after unpin and Panel close). Native Hyprland behavior of the
+toggle and the broader Waybar proof remain unmeasured.
+
 ## 2026-09-01 - Separate Ribbon pinning from Panel controls
 
 Two `weftwise reveal` requests within 1500 milliseconds now pin only the Ribbon

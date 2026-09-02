@@ -75,12 +75,20 @@ change system state.
 The recommended compositor binding is `Super+grave`, but Hyprland owns the key
 choice. The parameter-free remote action reveals the Ribbon for 2.5 seconds;
 pointer entry cancels that timeout and resumes normal pointer-owned behavior.
-A second invocation within 1500 milliseconds pins only the Ribbon. The Ribbon
-stays visible across pointer departure and collapses when another surface takes
-the native outside-click grab. Clicking the Ribbon remains the explicit route
-to the Panel. Grab-release pointer re-entry is suppressed until it settles or
-the pointer leaves, so click-away cannot immediately reveal the Ribbon again.
-Weftwise does not install a GTK global shortcut.
+A second invocation within 1500 milliseconds pins only the Ribbon. A pinned
+Ribbon has no click-away dismissal: it stays visible across pointer departure
+and is collapsed only by pressing the reveal shortcut again, which acts as an
+explicit toggle. Any shortcut press while the Ribbon is pinned or the Panel is
+open collapses straight to the Selvage. Clicking the Ribbon remains the explicit
+route to the Panel, and the keyboard pin survives that Panel round-trip: opening
+the Panel keeps the pin and closing it restores the pinned Ribbon. Weftwise does
+not install a GTK global shortcut.
+
+This toggle model was chosen over a native outside-click guard. The trade-off is
+that a pinned Ribbon is dismissed only by the shortcut (or by opening the Panel
+and toggling), not by clicking elsewhere on the desktop; in exchange the pin has
+no hidden focus-grab surface, so an ordinary click never steals focus from the
+client beneath it and the pin state stays fully described by the reducer.
 
 ### Panel
 

@@ -28,7 +28,7 @@ pub const USAGE: &str = "Usage:\n\
   weftwise activity cancel <id>\n\
 \n\
 Activity kinds: timer, build, download, render, command-result.\n\
-Invoke `weftwise reveal` twice within 1500 ms to pin the Ribbon until focus leaves it.\n\
+Invoke `weftwise reveal` twice within 1500 ms to pin the Ribbon; invoke it again to toggle the pin off.\n\
 Labels are bounded display data. Commands, argument vectors, and shell strings are not accepted.";
 
 /// Parsed command that has not yet touched GTK, D-Bus, or the local endpoint.

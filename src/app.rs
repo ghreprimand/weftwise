@@ -23,8 +23,8 @@ use crate::services::{activity, clock, hyprland, logind};
 use crate::shell::outputs::{OutputChanges, ShellEvent, SurfaceError, SurfaceManager};
 use crate::shell::{ProofOptionError, ProofOptions};
 use crate::state::{
-    AppState, CLICK_AWAY_REARM_DELAY, DISMISS_DELAY, DWELL_DELAY, GLANCE_DISMISS_DELAY,
-    InteractionEffect, InteractionInput, InteractionToken, OutputId,
+    AppState, DISMISS_DELAY, DWELL_DELAY, GLANCE_DISMISS_DELAY, InteractionEffect,
+    InteractionInput, InteractionToken, OutputId, PresentationLevel,
 };
 use crate::supervisor::{RuntimeConfigurationError, Supervisor, configure_relm_runtime};
 
@@ -325,7 +325,6 @@ impl AppModel {
                 (output, InteractionInput::PointerEnteredImmediate)
             }
             AppAction::PointerLeft(output) => (output, InteractionInput::PointerLeft),
-            AppAction::FocusLost(output) => (output, InteractionInput::FocusLost),
             AppAction::OpenPanel(output) => (output, InteractionInput::OpenPanel),
             AppAction::ClosePanel(output) => (output, InteractionInput::ClosePanel),
             AppAction::AdjustOutputVolume(output, delta) => {
@@ -344,10 +343,6 @@ impl AppModel {
             }
             AppAction::Candidate(output, action) => {
                 self.handle_candidate_action(output, action);
-                return;
-            }
-            AppAction::Quit => {
-                self.shutdown_owned();
                 return;
             }
         };
@@ -479,7 +474,6 @@ impl AppModel {
         let input = match kind {
             TimerKind::Dwell => InteractionInput::DwellElapsed(token),
             TimerKind::Dismiss => InteractionInput::DismissElapsed(token),
-            TimerKind::Rearm => InteractionInput::DismissalGuardElapsed(token),
         };
         self.apply_interaction(output, input, sender);
     }
@@ -517,13 +511,6 @@ impl AppModel {
                     GLANCE_DISMISS_DELAY,
                     sender.input_sender().clone(),
                 ),
-                InteractionEffect::ScheduleDismissalGuard(token) => self.timers.schedule(
-                    output,
-                    TimerKind::Rearm,
-                    token,
-                    CLICK_AWAY_REARM_DELAY,
-                    sender.input_sender().clone(),
-                ),
                 InteractionEffect::Render => self.render(output),
             }
         }
@@ -535,7 +522,15 @@ impl AppModel {
             .focused_output()
             .or_else(|| self.state.output_ids().next());
         if let Some(output) = output {
-            let input = if self.reveal_taps.register(Instant::now()) {
+            let held_open = self.state.output(output).is_some_and(|presentation| {
+                presentation.is_pinned() || presentation.level() == PresentationLevel::Panel
+            });
+            let input = if held_open {
+                // A pinned Ribbon or open Panel toggles closed; the next tap is a
+                // plain glance rather than an accidental re-pin.
+                self.reveal_taps.reset();
+                InteractionInput::UnpinRibbon
+            } else if self.reveal_taps.register(Instant::now()) {
                 InteractionInput::PinRibbon
             } else {
                 InteractionInput::RevealForGlance
@@ -626,6 +621,10 @@ impl RevealTapTracker {
             .is_some_and(|last| now.duration_since(last) <= REVEAL_DOUBLE_TAP_WINDOW);
         self.last = (!double_tap).then_some(now);
         double_tap
+    }
+
+    fn reset(&mut self) {
+        self.last = None;
     }
 }
 

@@ -28,8 +28,6 @@ pub const DWELL_DELAY: Duration = Duration::from_millis(240);
 pub const DISMISS_DELAY: Duration = Duration::from_millis(360);
 /// Time a keyboard-requested glance remains visible without pointer interaction.
 pub const GLANCE_DISMISS_DELAY: Duration = Duration::from_millis(2_500);
-/// Delay that absorbs GTK pointer re-entry synthesized when a click-away grab closes.
-pub const CLICK_AWAY_REARM_DELAY: Duration = Duration::from_millis(500);
 /// Maximum local workspace marks rendered in the navigation region.
 pub const MAX_NAVIGATION_MARKS: usize = 16;
 /// Maximum selected activity marks rendered in the center region.
@@ -749,10 +747,8 @@ pub enum InteractionInput {
     RevealForGlance,
     /// A repeated compositor key binding pinned the Ribbon without opening the Panel.
     PinRibbon,
-    /// The keyboard-pinned Ribbon lost application focus.
-    FocusLost,
-    /// The native click-away grab has settled and pointer reveal may be rearmed.
-    DismissalGuardElapsed(InteractionToken),
+    /// The reveal shortcut was pressed again, toggling a pinned Ribbon closed.
+    UnpinRibbon,
     /// A previously scheduled dwell timer completed.
     DwellElapsed(InteractionToken),
     /// A previously scheduled dismissal timer completed.
@@ -774,8 +770,6 @@ pub enum InteractionEffect {
     ScheduleDismiss(InteractionToken),
     /// Schedule the longer dismissal used by a keyboard-requested glance.
     ScheduleGlanceDismiss(InteractionToken),
-    /// Rearm pointer reveal after a native click-away grab has settled.
-    ScheduleDismissalGuard(InteractionToken),
     /// Re-render the output surface from authoritative state.
     Render,
 }
@@ -786,7 +780,6 @@ pub struct OutputPresentation {
     level: PresentationLevel,
     pointer_inside: bool,
     ribbon_pinned: bool,
-    pointer_reveal_suppressed: bool,
     reduced_motion: bool,
     generation: u64,
 }
@@ -799,7 +792,6 @@ impl OutputPresentation {
             level: PresentationLevel::Selvage,
             pointer_inside: false,
             ribbon_pinned: false,
-            pointer_reveal_suppressed: false,
             reduced_motion,
             generation: 0,
         }
@@ -829,6 +821,14 @@ impl OutputPresentation {
         self.ribbon_pinned
     }
 
+    /// Whether the Ribbon is held open by an explicit keyboard pin. Named for
+    /// the reveal-shortcut toggle, which dismisses a pinned Ribbon instead of
+    /// revealing it.
+    #[must_use]
+    pub const fn is_pinned(&self) -> bool {
+        self.ribbon_pinned
+    }
+
     /// Apply one deterministic input and return required side effects.
     pub fn update(&mut self, input: InteractionInput) -> Vec<InteractionEffect> {
         match input {
@@ -837,8 +837,7 @@ impl OutputPresentation {
             InteractionInput::PointerLeft => self.pointer_left(),
             InteractionInput::RevealForGlance => self.reveal_for_glance(),
             InteractionInput::PinRibbon => self.pin_ribbon(),
-            InteractionInput::FocusLost => self.focus_lost(),
-            InteractionInput::DismissalGuardElapsed(token) => self.dismissal_guard_elapsed(token),
+            InteractionInput::UnpinRibbon => self.unpin_ribbon(),
             InteractionInput::DwellElapsed(token) => self.dwell_elapsed(token),
             InteractionInput::DismissElapsed(token) => self.dismiss_elapsed(token),
             InteractionInput::OpenPanel => self.open_panel(),
@@ -850,7 +849,7 @@ impl OutputPresentation {
     fn pointer_entered(&mut self) -> Vec<InteractionEffect> {
         self.pointer_inside = true;
         let token = self.next_token();
-        if self.level == PresentationLevel::Selvage && !self.pointer_reveal_suppressed {
+        if self.level == PresentationLevel::Selvage {
             vec![InteractionEffect::ScheduleDwell(token)]
         } else {
             Vec::new()
@@ -860,7 +859,7 @@ impl OutputPresentation {
     fn pointer_entered_immediate(&mut self) -> Vec<InteractionEffect> {
         self.pointer_inside = true;
         self.next_token();
-        if self.level == PresentationLevel::Selvage && !self.pointer_reveal_suppressed {
+        if self.level == PresentationLevel::Selvage {
             self.level = PresentationLevel::Ribbon;
             vec![InteractionEffect::Render]
         } else {
@@ -871,10 +870,6 @@ impl OutputPresentation {
     fn pointer_left(&mut self) -> Vec<InteractionEffect> {
         self.pointer_inside = false;
         let token = self.next_token();
-        if self.pointer_reveal_suppressed {
-            self.pointer_reveal_suppressed = false;
-            return Vec::new();
-        }
         if self.level == PresentationLevel::Ribbon && !self.ribbon_pinned {
             vec![InteractionEffect::ScheduleDismiss(token)]
         } else {
@@ -908,26 +903,15 @@ impl OutputPresentation {
         vec![InteractionEffect::Render]
     }
 
-    fn focus_lost(&mut self) -> Vec<InteractionEffect> {
-        if !self.ribbon_pinned {
+    fn unpin_ribbon(&mut self) -> Vec<InteractionEffect> {
+        if !self.ribbon_pinned && self.level != PresentationLevel::Panel {
             return Vec::new();
         }
         self.pointer_inside = false;
         self.ribbon_pinned = false;
-        self.pointer_reveal_suppressed = true;
-        let token = self.next_token();
+        self.next_token();
         self.level = PresentationLevel::Selvage;
-        vec![
-            InteractionEffect::Render,
-            InteractionEffect::ScheduleDismissalGuard(token),
-        ]
-    }
-
-    fn dismissal_guard_elapsed(&mut self, token: InteractionToken) -> Vec<InteractionEffect> {
-        if token == self.token() {
-            self.pointer_reveal_suppressed = false;
-        }
-        Vec::new()
+        vec![InteractionEffect::Render]
     }
 
     fn dwell_elapsed(&mut self, token: InteractionToken) -> Vec<InteractionEffect> {
@@ -953,7 +937,9 @@ impl OutputPresentation {
     fn open_panel(&mut self) -> Vec<InteractionEffect> {
         if self.level == PresentationLevel::Ribbon {
             self.next_token();
-            self.ribbon_pinned = false;
+            // A keyboard pin survives the Panel round-trip: opening does not
+            // clear it, and `close_panel` restores the pinned Ribbon rather
+            // than collapsing to the Selvage.
             self.level = PresentationLevel::Panel;
             vec![InteractionEffect::Render]
         } else {
@@ -964,7 +950,7 @@ impl OutputPresentation {
     fn close_panel(&mut self) -> Vec<InteractionEffect> {
         if self.level == PresentationLevel::Panel {
             self.next_token();
-            self.level = if self.pointer_inside {
+            self.level = if self.ribbon_pinned || self.pointer_inside {
                 PresentationLevel::Ribbon
             } else {
                 PresentationLevel::Selvage
