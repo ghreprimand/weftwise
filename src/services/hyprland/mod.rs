@@ -1,11 +1,8 @@
 //! Direct Hyprland request/event socket adapter.
 
 use std::collections::BTreeMap;
-use std::env;
-use std::ffi::OsString;
-use std::fmt;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 
 use serde::Deserialize;
@@ -19,6 +16,14 @@ use crate::state::{
 };
 use crate::supervisor::{Cancellation, ReconnectBackoff};
 
+mod discovery;
+
+pub use discovery::{
+    DiscoveryEnvironment, DiscoveryError, InstanceScan, MAX_METADATA_BYTES, MAX_SCANNED_INSTANCES,
+    ProcProbe, ProcessLiveness, ProcessProbe, SocketPaths, current_uid, scan_instances,
+    valid_signature,
+};
+
 /// Maximum bytes accepted from any one JSON request.
 pub const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 /// Maximum bytes accepted from one newline-delimited event.
@@ -29,129 +34,8 @@ pub const MAX_BUFFERED_EVENTS: usize = 512;
 pub const MAX_BUFFERED_EVENT_BYTES: usize = 256 * 1024;
 
 const REQUEST_DEADLINE: Duration = Duration::from_millis(900);
-
-/// Environment used to resolve one Hyprland instance without logging paths.
-#[derive(Clone, Eq, PartialEq)]
-pub struct DiscoveryEnvironment {
-    /// Absolute XDG runtime base.
-    pub runtime_dir: Option<PathBuf>,
-    /// Hyprland instance directory leaf.
-    pub instance_signature: Option<OsString>,
-}
-
-impl fmt::Debug for DiscoveryEnvironment {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("DiscoveryEnvironment")
-            .field(
-                "runtime_dir",
-                &self.runtime_dir.as_ref().map(|_| "<redacted>"),
-            )
-            .field(
-                "instance_signature",
-                &self.instance_signature.as_ref().map(|_| "<redacted>"),
-            )
-            .finish()
-    }
-}
-
-impl DiscoveryEnvironment {
-    /// Read the current process environment without exposing values.
-    #[must_use]
-    pub fn discover() -> Self {
-        Self {
-            runtime_dir: env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from),
-            instance_signature: env::var_os("HYPRLAND_INSTANCE_SIGNATURE"),
-        }
-    }
-}
-
-/// Resolved request and event sockets. Debug formatting is always redacted.
-#[derive(Clone, Eq, PartialEq)]
-pub struct SocketPaths {
-    request: PathBuf,
-    events: PathBuf,
-}
-
-impl fmt::Debug for SocketPaths {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("SocketPaths")
-            .field("request", &"<redacted>")
-            .field("events", &"<redacted>")
-            .finish()
-    }
-}
-
-impl SocketPaths {
-    /// Re-resolve both sockets from the current process environment.
-    pub fn discover() -> Result<Self, DiscoveryError> {
-        Self::from_environment(&DiscoveryEnvironment::discover())
-    }
-
-    /// Resolve both sockets from explicit, testable values.
-    pub fn from_environment(environment: &DiscoveryEnvironment) -> Result<Self, DiscoveryError> {
-        let runtime = environment
-            .runtime_dir
-            .as_deref()
-            .ok_or(DiscoveryError::MissingRuntimeDirectory)?;
-        if !runtime.is_absolute() {
-            return Err(DiscoveryError::RelativeRuntimeDirectory);
-        }
-        let signature = environment
-            .instance_signature
-            .as_deref()
-            .ok_or(DiscoveryError::MissingInstanceSignature)?;
-        let signature = signature
-            .to_str()
-            .filter(|signature| valid_signature(signature))
-            .ok_or(DiscoveryError::InvalidInstanceSignature)?;
-        let instance = runtime.join("hypr").join(signature);
-        Ok(Self {
-            request: instance.join(".socket.sock"),
-            events: instance.join(".socket2.sock"),
-        })
-    }
-
-    /// Request socket, exposed only for direct transport tests.
-    #[must_use]
-    pub fn request(&self) -> &Path {
-        &self.request
-    }
-
-    /// Event socket, exposed only for direct transport tests.
-    #[must_use]
-    pub fn events(&self) -> &Path {
-        &self.events
-    }
-}
-
-fn valid_signature(signature: &str) -> bool {
-    !signature.is_empty()
-        && signature.len() <= 128
-        && signature != "."
-        && signature != ".."
-        && signature
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
-}
-
-/// Public-safe discovery failure.
-#[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
-pub enum DiscoveryError {
-    /// XDG_RUNTIME_DIR was absent.
-    #[error("the user runtime directory is unavailable")]
-    MissingRuntimeDirectory,
-    /// The runtime directory was not absolute.
-    #[error("the user runtime directory is invalid")]
-    RelativeRuntimeDirectory,
-    /// No active Hyprland instance was advertised.
-    #[error("no Hyprland instance is available")]
-    MissingInstanceSignature,
-    /// The instance signature was not a safe directory leaf.
-    #[error("the Hyprland instance identifier is invalid")]
-    InvalidInstanceSignature,
-}
+/// Maximum in-place snapshot repairs before a session falls back to reconnect.
+pub const MAX_GAP_REPAIRS: u32 = 3;
 
 /// Structured parser failure; raw desktop data is never included.
 #[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
@@ -258,6 +142,29 @@ impl EventBuffer {
             self.events.push(event);
         }
         Ok(())
+    }
+
+    /// Buffer one already-decoded record with per-record tolerance. A malformed
+    /// individual line is skipped rather than ending the session; only the
+    /// count and byte bounds return `BufferLimit`. Used while snapshotting.
+    pub fn observe_record(&mut self, line: &str) -> Result<(), ParseError> {
+        let next_bytes = self.source_bytes.saturating_add(line.len());
+        if next_bytes > self.maximum_bytes {
+            return Err(ParseError::BufferLimit);
+        }
+        self.source_bytes = next_bytes;
+        match parse_event_line(line) {
+            Ok(Some(event)) => {
+                if self.events.len() >= self.maximum_events {
+                    return Err(ParseError::BufferLimit);
+                }
+                self.events.push(event);
+                Ok(())
+            }
+            // Unknown and individually malformed lines are tolerated.
+            Ok(None) | Err(ParseError::MalformedEvent) => Ok(()),
+            Err(other) => Err(other),
+        }
     }
 
     /// Number of parsed known events.
@@ -706,18 +613,24 @@ impl Boolish {
 }
 
 /// Run the independently reconnecting adapter until cancellation.
+///
+/// The environment signature is trusted only for the first connection; every
+/// reconnect rescans the runtime directory so a compositor restart is followed
+/// to its new instance rather than retrying a stale socket path.
 pub async fn run<Emit>(emit: Emit, mut cancellation: Cancellation)
 where
     Emit: Fn(HyprlandUpdate) + Send + Sync + 'static,
 {
     let mut backoff = ReconnectBackoff::default();
+    let mut prefer_environment = true;
     loop {
         emit(HyprlandUpdate::Connecting);
-        let session = run_session(&emit);
+        let connection = run_connection(&emit, prefer_environment);
         let (error, initialized) = tokio::select! {
-            result = session => result,
+            result = connection => result,
             () = cancellation.cancelled() => return,
         };
+        prefer_environment = false;
         if initialized {
             backoff.reset();
         }
@@ -736,54 +649,249 @@ where
     }
 }
 
-async fn run_session<Emit>(emit: &Emit) -> (AdapterError, bool)
+/// Resolve ranked instance candidates for one connection attempt.
+fn resolve_candidates(prefer_environment: bool) -> Result<Vec<SocketPaths>, DiscoveryError> {
+    let scan = InstanceScan::from_environment()?;
+    let uid = current_uid().ok_or(DiscoveryError::OwnerUnavailable)?;
+    match scan_instances(&scan, uid, prefer_environment, &ProcProbe) {
+        Ok(candidates) => Ok(candidates),
+        // First-connection fast path when the runtime directory cannot be
+        // scanned but the environment signature is present and valid.
+        Err(DiscoveryError::NoLiveInstance) if prefer_environment => {
+            SocketPaths::discover().map(|paths| vec![paths])
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// Try each ranked candidate in order until one connects and answers a complete
+/// snapshot, then run its event loop until an error requires reconnecting.
+async fn run_connection<Emit>(emit: &Emit, prefer_environment: bool) -> (AdapterError, bool)
 where
     Emit: Fn(HyprlandUpdate) + Send + Sync,
 {
-    let paths = match SocketPaths::discover() {
-        Ok(paths) => paths,
+    let candidates = match resolve_candidates(prefer_environment) {
+        Ok(candidates) => candidates,
         Err(error) => return (error.into(), false),
     };
-    let events = match UnixStream::connect(paths.events()).await {
-        Ok(events) => events,
-        Err(source) => return (AdapterError::Socket { source }, false),
-    };
+    let mut last_error = AdapterError::from(DiscoveryError::NoLiveInstance);
+    for paths in candidates {
+        match establish_session(&paths, emit).await {
+            Ok((reader, workspaces, buffered)) => {
+                return run_event_loop(&paths, reader, workspaces, buffered, emit).await;
+            }
+            Err(error) => last_error = error,
+        }
+    }
+    (last_error, false)
+}
+
+/// Connect the event socket, take the full snapshot, and emit it. Success here
+/// is the authoritative liveness proof for a candidate instance.
+async fn establish_session<Emit>(
+    paths: &SocketPaths,
+    emit: &Emit,
+) -> Result<(BufReader<UnixStream>, WorkspaceCatalog, Vec<HyprlandEvent>), AdapterError>
+where
+    Emit: Fn(HyprlandUpdate) + Send + Sync,
+{
+    let events = UnixStream::connect(paths.events())
+        .await
+        .map_err(|source| AdapterError::Socket { source })?;
     let mut reader = BufReader::new(events);
     let mut buffer = EventBuffer::default();
-    let snapshot = match take_snapshot(&paths, &mut reader, &mut buffer).await {
-        Ok(snapshot) => snapshot,
-        Err(error) => return (error, false),
-    };
-    let mut workspaces = WorkspaceCatalog::from_snapshot(&snapshot);
+    let snapshot = take_snapshot(paths, &mut reader, &mut buffer).await?;
+    let workspaces = WorkspaceCatalog::from_snapshot(&snapshot);
     emit(HyprlandUpdate::Snapshot(snapshot));
-    for event in buffer.drain() {
-        if event == HyprlandEvent::ResnapshotRequired {
-            return (AdapterError::SnapshotGap, true);
-        }
-        if let Err(error) = workspaces.observe(&event) {
+    Ok((reader, workspaces, buffer.drain().collect()))
+}
+
+/// Drive one established session: replay buffered events, then read live records
+/// with per-record tolerance and bounded in-place gap repair.
+async fn run_event_loop<Emit>(
+    paths: &SocketPaths,
+    mut reader: BufReader<UnixStream>,
+    mut workspaces: WorkspaceCatalog,
+    buffered: Vec<HyprlandEvent>,
+    emit: &Emit,
+) -> (AdapterError, bool)
+where
+    Emit: Fn(HyprlandUpdate) + Send + Sync,
+{
+    let mut repairs: u32 = 0;
+    let mut tainted = false;
+
+    for event in buffered {
+        if let Err(error) = reconcile_event(
+            paths,
+            &mut reader,
+            &mut workspaces,
+            emit,
+            &mut repairs,
+            &mut tainted,
+            event,
+        )
+        .await
+        {
             return (error, true);
         }
-        emit(HyprlandUpdate::Event(event));
     }
 
     loop {
-        let line = match read_bounded_event_line(&mut reader).await {
-            Ok(line) => line,
+        let record = match read_event_record(&mut reader).await {
+            Ok(record) => record,
             Err(error) => return (error, true),
         };
-        match parse_event_line(&line) {
-            Ok(Some(HyprlandEvent::ResnapshotRequired)) => {
-                return (AdapterError::SnapshotGap, true);
-            }
-            Ok(Some(event)) => {
-                if let Err(error) = workspaces.observe(&event) {
-                    return (error, true);
+        let outcome = match record {
+            EventRecord::Complete(bytes) => match classify_line(&bytes) {
+                LineClass::Event(event) => {
+                    reconcile_event(
+                        paths,
+                        &mut reader,
+                        &mut workspaces,
+                        emit,
+                        &mut repairs,
+                        &mut tainted,
+                        event,
+                    )
+                    .await
                 }
-                emit(HyprlandUpdate::Event(event));
-            }
-            Ok(None) => {}
-            Err(error) => return (error.into(), true),
+                LineClass::Benign => Ok(()),
+                LineClass::Gap => {
+                    handle_gap(
+                        paths,
+                        &mut reader,
+                        &mut workspaces,
+                        emit,
+                        &mut repairs,
+                        &mut tainted,
+                    )
+                    .await
+                }
+            },
+            EventRecord::OversizeDiscarded => Ok(()),
+            EventRecord::Eof => return (AdapterError::Disconnected, true),
+            EventRecord::Truncated => return (AdapterError::TruncatedEvent, true),
+        };
+        if let Err(error) = outcome {
+            return (error, true);
         }
+    }
+}
+
+/// Reconcile one parsed event and emit it, reporting an identity gap.
+fn observe_event<Emit>(
+    workspaces: &mut WorkspaceCatalog,
+    event: HyprlandEvent,
+    emit: &Emit,
+) -> Result<(), ()>
+where
+    Emit: Fn(HyprlandUpdate) + Send + Sync,
+{
+    if event == HyprlandEvent::ResnapshotRequired {
+        return Err(());
+    }
+    if workspaces.observe(&event).is_err() {
+        return Err(());
+    }
+    emit(HyprlandUpdate::Event(event));
+    Ok(())
+}
+
+/// Reconcile one event, repairing in place on an identity gap. A clean event
+/// resets the repair budget so isolated gaps do not accumulate toward reconnect.
+#[allow(clippy::too_many_arguments)]
+async fn reconcile_event<Emit>(
+    paths: &SocketPaths,
+    reader: &mut BufReader<UnixStream>,
+    workspaces: &mut WorkspaceCatalog,
+    emit: &Emit,
+    repairs: &mut u32,
+    tainted: &mut bool,
+    event: HyprlandEvent,
+) -> Result<(), AdapterError>
+where
+    Emit: Fn(HyprlandUpdate) + Send + Sync,
+{
+    if observe_event(workspaces, event, emit).is_ok() {
+        *repairs = 0;
+        Ok(())
+    } else {
+        handle_gap(paths, reader, workspaces, emit, repairs, tainted).await
+    }
+}
+
+/// Repair a genuine gap in place on the same event reader, bounded by
+/// `MAX_GAP_REPAIRS`. The taint flag surfaces transient uncertainty once.
+async fn handle_gap<Emit>(
+    paths: &SocketPaths,
+    reader: &mut BufReader<UnixStream>,
+    workspaces: &mut WorkspaceCatalog,
+    emit: &Emit,
+    repairs: &mut u32,
+    tainted: &mut bool,
+) -> Result<(), AdapterError>
+where
+    Emit: Fn(HyprlandUpdate) + Send + Sync,
+{
+    if *repairs >= MAX_GAP_REPAIRS {
+        // Repeated gaps in one session fall back to a full reconnect + rescan.
+        return Err(AdapterError::SnapshotGap);
+    }
+    *repairs += 1;
+    if !*tainted {
+        *tainted = true;
+        emit(HyprlandUpdate::Gap);
+    }
+    tracing::debug!(attempt = *repairs, "repairing Hyprland state gap in place");
+    let mut buffer = EventBuffer::default();
+    let snapshot = take_snapshot(paths, reader, &mut buffer).await?;
+    *workspaces = WorkspaceCatalog::from_snapshot(&snapshot);
+    emit(HyprlandUpdate::Snapshot(snapshot));
+    for event in buffer.drain().collect::<Vec<_>>() {
+        observe_event(workspaces, event, emit).map_err(|()| AdapterError::SnapshotGap)?;
+    }
+    Ok(())
+}
+
+/// A decoded event record. Malformed and oversize records are tolerated
+/// individually rather than ending the session.
+enum EventRecord {
+    /// One complete newline-terminated record, delimiter stripped.
+    Complete(Vec<u8>),
+    /// A record exceeded the byte limit and was discarded to the next newline.
+    OversizeDiscarded,
+    /// The stream ended cleanly on a record boundary.
+    Eof,
+    /// The stream ended between delimiters.
+    Truncated,
+}
+
+/// Classification of one complete record.
+enum LineClass {
+    /// A known event to reconcile and emit.
+    Event(HyprlandEvent),
+    /// An unknown event, non-UTF-8 bytes, or a line with no `>>` delimiter.
+    /// Nothing tracked can have changed, so the line is skipped.
+    Benign,
+    /// A genuine state gap requiring an in-place resnapshot: either an explicit
+    /// lifecycle event or a known event whose payload failed to parse, which
+    /// means a tracked state change was observed but its content is lost.
+    Gap,
+}
+
+/// Classify one complete record without ending the session on bad input.
+fn classify_line(bytes: &[u8]) -> LineClass {
+    let Ok(text) = std::str::from_utf8(bytes) else {
+        return LineClass::Benign;
+    };
+    if !text.contains(">>") {
+        return LineClass::Benign;
+    }
+    match parse_event_line(text) {
+        Ok(Some(HyprlandEvent::ResnapshotRequired)) | Err(_) => LineClass::Gap,
+        Ok(Some(event)) => LineClass::Event(event),
+        Ok(None) => LineClass::Benign,
     }
 }
 
@@ -819,8 +927,17 @@ async fn request_while_buffering(
     loop {
         tokio::select! {
             response = &mut request => return response,
-            line = read_bounded_event_line(reader) => {
-                buffer.push_line(&line?)?;
+            record = read_event_record(reader) => {
+                match record? {
+                    EventRecord::Complete(bytes) => {
+                        if let Ok(text) = std::str::from_utf8(&bytes) {
+                            buffer.observe_record(text)?;
+                        }
+                    }
+                    EventRecord::OversizeDiscarded => {}
+                    EventRecord::Eof => return Err(AdapterError::Disconnected),
+                    EventRecord::Truncated => return Err(AdapterError::TruncatedEvent),
+                }
             }
         }
     }
@@ -862,33 +979,110 @@ pub async fn request_json(path: &Path, command: &str) -> Result<String, AdapterE
     .map_err(|_| AdapterError::Deadline)?
 }
 
-async fn read_bounded_event_line(
+/// Read one newline-delimited record from the event socket with per-record
+/// tolerance. An over-long record is discarded to the next newline and reported
+/// as `OversizeDiscarded` rather than ending the session.
+async fn read_event_record(
     reader: &mut BufReader<UnixStream>,
-) -> Result<String, AdapterError> {
-    let mut line = Vec::new();
+) -> Result<EventRecord, AdapterError> {
+    let mut line: Vec<u8> = Vec::new();
+    let mut oversize = false;
     loop {
         let available = reader
             .fill_buf()
             .await
             .map_err(|source| AdapterError::Socket { source })?;
         if available.is_empty() {
-            return if line.is_empty() {
-                Err(AdapterError::Disconnected)
+            if oversize {
+                return Ok(EventRecord::Truncated);
+            }
+            return Ok(if line.is_empty() {
+                EventRecord::Eof
             } else {
-                Err(AdapterError::TruncatedEvent)
-            };
+                EventRecord::Truncated
+            });
         }
-        let end = available
-            .iter()
-            .position(|byte| *byte == b'\n')
-            .map_or(available.len(), |position| position + 1);
-        if line.len().saturating_add(end) > MAX_EVENT_LINE_BYTES {
-            return Err(AdapterError::EventLimit);
+        let newline = available.iter().position(|byte| *byte == b'\n');
+        let take = newline.map_or(available.len(), |position| position + 1);
+        if !oversize {
+            if line.len().saturating_add(take) > MAX_EVENT_LINE_BYTES {
+                oversize = true;
+                line.clear();
+            } else {
+                line.extend_from_slice(&available[..take]);
+            }
         }
-        line.extend_from_slice(&available[..end]);
-        reader.consume(end);
-        if line.last() == Some(&b'\n') {
-            return String::from_utf8(line).map_err(|_| ParseError::MalformedEvent.into());
+        reader.consume(take);
+        if newline.is_some() {
+            if oversize {
+                return Ok(EventRecord::OversizeDiscarded);
+            }
+            while matches!(line.last(), Some(b'\n' | b'\r')) {
+                line.pop();
+            }
+            return Ok(EventRecord::Complete(line));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classify_recognizes_events_gaps_and_benign_records() {
+        assert!(matches!(
+            classify_line(b"workspacev2>>1,one"),
+            LineClass::Event(_)
+        ));
+        // A lifecycle event that invalidates cached identity is a genuine gap.
+        assert!(matches!(
+            classify_line(b"monitoraddedv2>>SYNTH-1"),
+            LineClass::Gap
+        ));
+        // A known event with an unparseable payload lost a tracked change.
+        assert!(matches!(
+            classify_line(b"workspacev2>>notanid,one"),
+            LineClass::Gap
+        ));
+        // Unknown, legacy, delimiter-less, and non-UTF-8 are benign.
+        assert!(matches!(
+            classify_line(b"futureevent>>opaque"),
+            LineClass::Benign
+        ));
+        assert!(matches!(classify_line(b"workspace>>1"), LineClass::Benign));
+        assert!(matches!(classify_line(b"nodelimiter"), LineClass::Benign));
+        assert!(matches!(
+            classify_line(&[0xff, 0xfe, 0x00]),
+            LineClass::Benign
+        ));
+    }
+
+    #[test]
+    fn observe_record_tolerates_malformed_lines_but_bounds_growth() {
+        let mut buffer = EventBuffer::with_limits(8, 4096);
+        // A malformed line is skipped rather than ending the session.
+        buffer
+            .observe_record("workspacev2>>bad")
+            .expect("malformed skipped");
+        assert!(buffer.is_empty());
+        buffer
+            .observe_record("workspacev2>>1,one")
+            .expect("known event");
+        assert_eq!(buffer.len(), 1);
+        // Unknown events are tolerated and not stored.
+        buffer
+            .observe_record("futureevent>>opaque")
+            .expect("unknown skipped");
+        assert_eq!(buffer.len(), 1);
+    }
+
+    #[test]
+    fn observe_record_enforces_the_byte_bound() {
+        let mut buffer = EventBuffer::with_limits(8, 8);
+        assert_eq!(
+            buffer.observe_record("workspacev2>>1,one"),
+            Err(ParseError::BufferLimit)
+        );
     }
 }

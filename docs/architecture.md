@@ -309,28 +309,47 @@ not turn hidden exact values into continuous UI work.
 ### Hyprland ordering
 
 The Hyprland adapter resolves the active instance below `XDG_RUNTIME_DIR` on
-every connection attempt and never logs the instance identifier or socket
-paths. It connects the newline-delimited event socket first. While five JSON
-snapshots are requested through fresh, strictly timed, size-bounded request
-connections, parsed events enter a count- and byte-bounded buffer. The root
+every connection attempt and never logs the instance identifier, PID, Wayland
+display, or socket paths. The environment signature is trusted only for the
+first connection; every reconnect rescans `XDG_RUNTIME_DIR/hypr` so a compositor
+restart that mints a fresh signature is followed to its new instance rather than
+retried on a stale socket path. Scanning is bounded and validates each candidate
+directory as an owned, non-symlink directory whose `.socket.sock` and
+`.socket2.sock` are owned, non-symlink Unix sockets; a definitively dead PID
+(parsed defensively from the instance lock or log and confirmed absent under
+`/proc`) excludes a candidate, while an unparseable or unknown PID is retained.
+Candidates are ranked deterministically by Wayland-display affinity, signature
+timestamp, lock or directory recency, then lexically. Ranking is only an
+ordering hint: the authoritative liveness proof is a successful event-socket
+connection plus a complete five-request snapshot, so a stale directory that
+ranks first is skipped when it fails to answer. No empty request-socket probe is
+used. The adapter connects the newline-delimited event socket first; while five
+JSON snapshots are requested through fresh, strictly timed, size-bounded request
+connections, parsed events enter a count- and byte-bounded buffer, and the root
 receives one atomic snapshot before those events replay in wire order.
 
-Event records split only at the first `>>`. Address-bearing v2 forms are used
-where Hyprland provides them. Unknown events are ignored; malformed recognized
-events, overlong or truncated reads, monitor lifecycle, legacy events without
-stable identity that cannot be paired safely, unresolved workspace identity,
-and buffer overflow mark retained state stale and force fresh discovery plus a
-new snapshot. Paired legacy workspace, focused-output, move, and title events
-are ignored in favor of their stable-identity counterparts. Bounded exponential
+Event records split only at the first `>>` and are tolerated per record. An
+over-long line is discarded to the next newline and skipped rather than ending
+the session; a non-UTF-8 line, an unknown event name, or a line without the
+delimiter is skipped because nothing tracked can have changed; paired legacy
+workspace, focused-output, move, and title events are ignored in favor of their
+address-bearing v2 counterparts. A genuine state gap - a monitor or workspace
+lifecycle event that invalidates cached identity, a known event whose payload
+fails to parse, or an unresolved workspace name - triggers an in-place
+resnapshot on the same event socket,
+bounded to three consecutive repairs before the session falls back to a full
+reconnect and rescan. A clean event resets the repair budget, and the first
+repair emits a single transient gap signal. Buffer overflow, a truncated read,
+or a clean disconnect ends the session for reconnect. Bounded exponential
 backoff includes jitter.
 
-That recovery boundary is limited to the current compositor session. Hyprland
-advertises a new instance signature after a full restart, while the existing
-process environment retains the former value, and GTK's Wayland connection is
-closed with the compositor. Weftwise therefore does not claim same-process
-recovery from a full compositor restart. Native acceptance for that lifecycle
-starts a fresh process after an orderly session cycle; synthetic transport
-tests can rotate safe instance directories without implying GTK survival.
+The IPC adapter therefore recovers across a compositor restart within the same
+process: on reconnect it rediscovers the new instance and re-establishes state.
+GTK's Wayland connection is still closed when the compositor exits, so the
+layer-shell surfaces themselves do not claim same-process survival of a full
+restart; native acceptance for that lifecycle starts a fresh process after an
+orderly session cycle. Synthetic transport tests rotate safe instance
+directories without implying GTK survival.
 The clock is a separate supervised in-process adapter and aligns each update to
 the next wall-clock minute rather than spawning or periodically drifting.
 Synchronous application shutdown first broadcasts cooperative cancellation,

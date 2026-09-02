@@ -6,6 +6,43 @@ or unmeasured. Planned work is never presented as implemented behavior.
 
 ---
 
+## 2026-09-02 - Hyprland live-instance rediscovery and per-record tolerance
+
+The Hyprland adapter now rediscovers the live compositor instance on every
+reconnect instead of retrying the inherited socket path. The environment
+signature is trusted only for the first connection; each reconnect performs a
+bounded scan of `XDG_RUNTIME_DIR/hypr`, validating each candidate as an owned,
+non-symlink directory with owned, non-symlink Unix sockets, excluding a
+definitively dead PID (parsed defensively from the instance lock or log and
+confirmed absent under `/proc`) while retaining unknown PIDs. Candidates are
+ranked by Wayland-display affinity, signature timestamp, recency, then lexically,
+but the authoritative liveness proof is a successful event-socket connect plus a
+complete five-request snapshot; ranking is only an ordering hint and no empty
+request-socket probe is used. Discovery never logs paths, signatures, PIDs, or
+the display. The IPC adapter therefore recovers across a compositor restart
+within the same process; the GTK layer surfaces still do not claim survival of a
+full restart, which remains a fresh-process native lifecycle.
+
+Event reading moved from a fail-fast line reader to a per-record reader: an
+over-long record is discarded to the next newline, and non-UTF-8, unknown, or
+delimiter-less lines are skipped rather than ending the session. A genuine
+state gap (a lifecycle event that invalidates cached identity, a known event
+whose payload fails to parse, or an unresolved workspace name) triggers an
+in-place resnapshot on the same event
+socket, bounded to three consecutive repairs before falling back to reconnect; a
+clean event resets the budget and the first repair emits a single transient gap.
+
+Discovery was split into `src/services/hyprland/discovery.rs` with an injectable
+scan input and process-liveness probe so a synthetic tree can be tested without a
+live session. New unit coverage: signature-timestamp parsing, timestamp and
+display-affinity ranking, dead-PID exclusion with unknown retention, missing- and
+symlinked-socket rejection, invalid-signature skip, environment promotion, PID
+source precedence, record classification, and the tolerant buffer bounds. The
+lock file name and PID source are treated as version-dependent hints with graceful
+degradation. The hermetic Unix-socket transport harness (EOF, truncation, socket
+rotation, snapshot/event ordering) is a separate test task; live-session recovery
+remains unmeasured here.
+
 ## 2026-09-02 - Replace Ribbon pin click-away with a shortcut toggle
 
 A keyboard-pinned Ribbon no longer uses native outside-click dismissal. The
