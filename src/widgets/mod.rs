@@ -8,21 +8,17 @@ use std::{
 use gtk4_layer_shell::{KeyboardMode, LayerShell};
 use relm4::gtk;
 use relm4::gtk::gdk;
-use relm4::gtk::glib;
 use relm4::gtk::prelude::*;
 
 use crate::action::AppAction;
 use crate::config::ThemeConfig;
-use crate::context::arbitration::{CandidateAction, Severity};
+use crate::context::arbitration::Severity;
 use crate::state::{
     MarkPattern, MarkShape, OutputId, OutputView, PresentationLevel, StatusMark, WorkspaceId,
     WorkspaceMark,
 };
 use crate::widgets::selvage::{MarkOp, diff_marks};
 
-pub mod active_context;
-pub mod clock;
-pub mod media;
 pub mod panel;
 pub mod ribbon;
 pub mod selvage;
@@ -76,10 +72,8 @@ pub(crate) fn install_style(display: &gdk::Display, theme: &ThemeConfig) {
 pub(crate) struct TopEdgeWidgets {
     /// Root overlay assigned to the layer window.
     pub root: gtk::Overlay,
-    revealer: gtk::Revealer,
-    ribbon_navigation_label: gtk::Label,
-    ribbon_context_label: gtk::Label,
-    ribbon_status_label: gtk::Label,
+    /// Dwell-revealed Ribbon: revealer, button, and region labels.
+    ribbon: ribbon::RibbonWidgets,
     selvage: gtk::Box,
     navigation_marks: gtk::Box,
     activity_marks: gtk::Box,
@@ -87,15 +81,8 @@ pub(crate) struct TopEdgeWidgets {
     navigation_retained: RefCell<Vec<RetainedMark<WorkspaceId, WorkspaceMark>>>,
     activity_retained: RefCell<Vec<RetainedMark<usize, StatusMark>>>,
     attention_retained: RefCell<Vec<RetainedMark<usize, StatusMark>>>,
-    popover: gtk::Popover,
-    first_panel_action: gtk::Button,
-    close_button: gtk::Button,
-    audio_controls: gtk::Box,
-    audio_label: gtk::Label,
-    volume_down: gtk::Button,
-    volume_up: gtk::Button,
-    mute_button: gtk::Button,
-    candidate_controls: Vec<(CandidateAction, gtk::Button)>,
+    /// Explicitly opened Panel popover and its controls.
+    panel: panel::PanelWidgets,
 }
 
 impl TopEdgeWidgets {
@@ -113,50 +100,8 @@ impl TopEdgeWidgets {
             .build();
         root.add_css_class("weftwise-root");
 
-        let ribbon_button = gtk::Button::builder()
-            .height_request(SURFACE_HEIGHT)
-            .hexpand(true)
-            .focusable(true)
-            .build();
-        ribbon_button.add_css_class("weftwise-ribbon");
-
-        let ribbon_navigation_label = gtk::Label::builder()
-            .label("")
-            .ellipsize(gtk::pango::EllipsizeMode::End)
-            .xalign(0.0)
-            .build();
-        ribbon_navigation_label.add_css_class("weftwise-ribbon-navigation");
-        let ribbon_context_label = gtk::Label::builder()
-            .label("")
-            .ellipsize(gtk::pango::EllipsizeMode::End)
-            .hexpand(true)
-            .xalign(0.5)
-            .build();
-        ribbon_context_label.add_css_class("weftwise-ribbon-context");
-        let ribbon_status_label = gtk::Label::builder()
-            .label("--:--")
-            .ellipsize(gtk::pango::EllipsizeMode::End)
-            .xalign(1.0)
-            .build();
-        ribbon_status_label.add_css_class("weftwise-ribbon-status");
-        let ribbon_regions = gtk::CenterBox::new();
-        ribbon_regions.set_start_widget(Some(&ribbon_navigation_label));
-        ribbon_regions.set_center_widget(Some(&ribbon_context_label));
-        ribbon_regions.set_end_widget(Some(&ribbon_status_label));
-        ribbon_regions.set_hexpand(true);
-        ribbon_regions.add_css_class("weftwise-ribbon-regions");
-        ribbon_button.set_child(Some(&ribbon_regions));
-
-        let reveal_emit = emit.clone();
-        ribbon_button.connect_clicked(move |_| reveal_emit(AppAction::OpenPanel(output)));
-
-        let revealer = gtk::Revealer::builder()
-            .transition_type(gtk::RevealerTransitionType::SlideDown)
-            .transition_duration(RIBBON_TRANSITION_MILLIS)
-            .reveal_child(false)
-            .child(&ribbon_button)
-            .build();
-        root.set_child(Some(&revealer));
+        let ribbon = ribbon::build(output, emit.clone());
+        root.set_child(Some(&ribbon.revealer));
 
         let selvage = gtk::Box::builder()
             .height_request(SELVAGE_HEIGHT)
@@ -195,122 +140,7 @@ impl TopEdgeWidgets {
         selvage.append(&attention_marks);
         root.add_overlay(&selvage);
 
-        let panel_content = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(8)
-            .margin_top(12)
-            .margin_bottom(12)
-            .margin_start(12)
-            .margin_end(12)
-            .build();
-
-        let heading = gtk::Label::new(Some("Weftwise controls"));
-        heading.set_xalign(0.0);
-        heading.add_css_class("title-4");
-        panel_content.append(&heading);
-
-        let audio_controls = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .spacing(6)
-            .accessible_role(gtk::AccessibleRole::Group)
-            .build();
-        let volume_down = gtk::Button::with_label("Volume -10");
-        volume_down.set_focusable(true);
-        let audio_label = gtk::Label::new(Some("Volume unavailable"));
-        audio_label.set_xalign(0.5);
-        let volume_up = gtk::Button::with_label("Volume +10");
-        volume_up.set_focusable(true);
-        let mute_button = gtk::Button::with_label("Mute");
-        mute_button.set_focusable(true);
-        audio_controls.append(&volume_down);
-        audio_controls.append(&audio_label);
-        audio_controls.append(&volume_up);
-        audio_controls.append(&mute_button);
-        panel_content.append(&audio_controls);
-
-        let first_panel_action = volume_down.clone();
-        let volume_down_emit = emit.clone();
-        volume_down.connect_clicked(move |_| {
-            volume_down_emit(AppAction::AdjustOutputVolume(output, -10));
-        });
-        let volume_up_emit = emit.clone();
-        volume_up.connect_clicked(move |_| {
-            volume_up_emit(AppAction::AdjustOutputVolume(output, 10));
-        });
-        let mute_emit = emit.clone();
-        mute_button.connect_clicked(move |_| {
-            mute_emit(AppAction::ToggleOutputMute(output));
-        });
-
-        let media_controls = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .spacing(6)
-            .accessible_role(gtk::AccessibleRole::Group)
-            .build();
-        let candidate_controls = [
-            (CandidateAction::MediaSeek(-10_000), "Back 10 seconds"),
-            (CandidateAction::MediaPrevious, "Previous"),
-            (CandidateAction::MediaPlayPause, "Play or pause"),
-            (CandidateAction::MediaNext, "Next"),
-            (CandidateAction::MediaSeek(10_000), "Forward 10 seconds"),
-        ]
-        .into_iter()
-        .map(|(action, label)| {
-            let button = gtk::Button::with_label(label);
-            button.set_focusable(true);
-            button.set_visible(false);
-            let action_emit = emit.clone();
-            button.connect_clicked(move |_| {
-                action_emit(AppAction::Candidate(output, action));
-            });
-            media_controls.append(&button);
-            (action, button)
-        })
-        .collect::<Vec<_>>();
-        panel_content.append(&media_controls);
-
-        let close_button = gtk::Button::with_label("Close Panel");
-        close_button.set_focusable(true);
-        panel_content.append(&close_button);
-
-        let popover = gtk::Popover::builder()
-            .autohide(true)
-            .has_arrow(false)
-            .position(gtk::PositionType::Bottom)
-            .accessible_role(gtk::AccessibleRole::Dialog)
-            .child(&panel_content)
-            .build();
-        popover.add_css_class("weftwise-panel");
-        popover.set_parent(&ribbon_button);
-
-        let close_emit = emit.clone();
-        close_button.connect_clicked(move |_| {
-            close_emit(AppAction::ClosePanel(output));
-        });
-
-        let escape_controller = gtk::EventControllerKey::new();
-        let escape_popover = popover.downgrade();
-        escape_controller.connect_key_pressed(move |_, key, _, _| {
-            if key == gdk::Key::Escape {
-                if let Some(popover) = escape_popover.upgrade() {
-                    popover.popdown();
-                }
-                glib::Propagation::Stop
-            } else {
-                glib::Propagation::Proceed
-            }
-        });
-        popover.add_controller(escape_controller);
-
-        let close_emit = emit.clone();
-        let close_window = window.downgrade();
-        popover.connect_closed(move |_| {
-            if let Some(window) = close_window.upgrade() {
-                window.set_keyboard_mode(KeyboardMode::None);
-                GtkWindowExt::set_focus(&window, None::<&gtk::Widget>);
-            }
-            close_emit(AppAction::ClosePanel(output));
-        });
+        let panel = panel::build(window, output, &ribbon.button, emit.clone());
 
         let motion = gtk::EventControllerMotion::new();
         motion.set_propagation_phase(gtk::PropagationPhase::Capture);
@@ -342,10 +172,7 @@ impl TopEdgeWidgets {
 
         Self {
             root,
-            revealer,
-            ribbon_navigation_label,
-            ribbon_context_label,
-            ribbon_status_label,
+            ribbon,
             selvage,
             navigation_marks,
             activity_marks,
@@ -353,41 +180,38 @@ impl TopEdgeWidgets {
             navigation_retained: RefCell::new(Vec::new()),
             activity_retained: RefCell::new(Vec::new()),
             attention_retained: RefCell::new(Vec::new()),
-            popover,
-            first_panel_action,
-            close_button,
-            audio_controls,
-            audio_label,
-            volume_down,
-            volume_up,
-            mute_button,
-            candidate_controls,
+            panel,
         }
     }
 
     /// Render one authoritative presentation projection.
     pub fn render(&self, window: &gtk::ApplicationWindow, view: &OutputView) {
         let level = view.presentation.level();
-        self.revealer
+        self.ribbon
+            .revealer
             .set_transition_duration(if view.presentation.reduced_motion() {
                 0
             } else {
                 RIBBON_TRANSITION_MILLIS
             });
-        self.revealer
+        self.ribbon
+            .revealer
             .set_reveal_child(level != PresentationLevel::Selvage);
         self.selvage
             .set_visible(level == PresentationLevel::Selvage);
-        self.ribbon_navigation_label
+        self.ribbon
+            .navigation_label
             .set_label(&view.ribbon_navigation_label);
-        self.ribbon_context_label
+        self.ribbon
+            .context_label
             .set_label(&view.ribbon_context_label);
-        self.ribbon_status_label
+        self.ribbon
+            .status_label
             .set_label(&view.ribbon_status_label);
         for label in [
-            &self.ribbon_navigation_label,
-            &self.ribbon_context_label,
-            &self.ribbon_status_label,
+            &self.ribbon.navigation_label,
+            &self.ribbon.context_label,
+            &self.ribbon.status_label,
         ] {
             label.set_tooltip_text(Some(&view.ribbon_accessible_label));
         }
@@ -406,58 +230,60 @@ impl TopEdgeWidgets {
             &self.attention_retained,
             &view.attention,
         );
-        for (action, button) in &self.candidate_controls {
+        for (action, button) in &self.panel.candidate_controls {
             button.set_visible(view.candidate_actions.contains(action));
         }
-        self.audio_controls.set_visible(view.audio.is_some());
+        self.panel.audio_controls.set_visible(view.audio.is_some());
         if let Some(audio) = view.audio {
             let label = if audio.muted {
                 "Volume muted".to_owned()
             } else {
                 format!("Volume {}%", audio.percent)
             };
-            self.audio_label.set_label(&label);
-            self.volume_down.set_sensitive(audio.can_set_volume);
-            self.volume_up.set_sensitive(audio.can_set_volume);
-            self.mute_button.set_sensitive(audio.can_set_mute);
-            self.mute_button
+            self.panel.audio_label.set_label(&label);
+            self.panel.volume_down.set_sensitive(audio.can_set_volume);
+            self.panel.volume_up.set_sensitive(audio.can_set_volume);
+            self.panel.mute_button.set_sensitive(audio.can_set_mute);
+            self.panel
+                .mute_button
                 .set_label(if audio.muted { "Unmute" } else { "Mute" });
         }
 
         if level == PresentationLevel::Panel {
             window.set_keyboard_mode(KeyboardMode::OnDemand);
-            let opening = !self.popover.is_visible();
+            let opening = !self.panel.popover.is_visible();
             if opening {
-                self.popover.popup();
-                if self.audio_controls.is_visible() {
-                    self.first_panel_action.grab_focus();
+                self.panel.popover.popup();
+                if self.panel.audio_controls.is_visible() {
+                    self.panel.first_panel_action.grab_focus();
                 } else if let Some((_, button)) = self
+                    .panel
                     .candidate_controls
                     .iter()
                     .find(|(_, button)| button.is_visible())
                 {
                     button.grab_focus();
                 } else {
-                    self.close_button.grab_focus();
+                    self.panel.close_button.grab_focus();
                 }
             }
         } else if view.presentation.ribbon_pinned() {
             window.set_keyboard_mode(KeyboardMode::OnDemand);
-            if self.popover.is_visible() {
-                self.popover.popdown();
+            if self.panel.popover.is_visible() {
+                self.panel.popover.popdown();
             }
         } else {
             window.set_keyboard_mode(KeyboardMode::None);
-            if self.popover.is_visible() {
-                self.popover.popdown();
+            if self.panel.popover.is_visible() {
+                self.panel.popover.popdown();
             }
         }
     }
 
     /// Detach the popover before its relative widget is destroyed.
     pub(crate) fn detach(&self) {
-        if self.popover.parent().is_some() {
-            self.popover.unparent();
+        if self.panel.popover.parent().is_some() {
+            self.panel.popover.unparent();
         }
     }
 }

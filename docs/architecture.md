@@ -360,10 +360,13 @@ directories and exercise the exact reconnect, ordering, and per-record tolerance
 path without a live compositor and without implying GTK survival.
 The clock is a separate supervised in-process adapter and aligns each update to
 the next wall-clock minute rather than spawning or periodically drifting.
-Synchronous application shutdown first broadcasts cooperative cancellation,
-allows a bounded 100-millisecond grace for adapters to finish, and aborts only
-stragglers. This preserves prompt GTK shutdown without racing every cancellation
-receiver.
+Application shutdown first broadcasts cooperative cancellation, then joins the
+owned tasks under a bounded 100-millisecond grace on a dedicated runtime off the
+GTK thread rather than busy-waiting the caller. Tasks still running at the
+deadline are aborted, and every join result is reaped so an adapter panic is
+observed as a redacted category count instead of being silently dropped. The
+PipeWire loop-thread join runs on the blocking pool for the same reason. This
+preserves prompt GTK shutdown without racing every cancellation receiver.
 
 ### MPRIS ordering and ownership
 
@@ -478,13 +481,24 @@ Live reload remains planned.
 
 ## Module boundaries
 
-The initial source layout retains dedicated modules for:
+The source layout retains dedicated modules for:
 
 - application lifecycle, messages, state, actions, and configuration;
 - shell surfaces and output ownership;
 - Hyprland, MPRIS, clock, local-activity, and process adapters;
 - context candidates and arbitration; and
-- Selvage, Ribbon, Panel, active-context, media, and clock components.
+- Selvage, Ribbon, and Panel widget construction.
 
-Files may begin small. Boundaries are established early because each subsystem
-has distinct ownership, failure, and testing requirements.
+The widget layer is `widgets/mod.rs` (the root `TopEdgeWidgets` that owns each
+output surface and renders authoritative projections) plus three construction
+submodules: `ribbon.rs` builds the revealer, activation button, and navigation,
+context, and status labels; `panel.rs` builds the attached popover with its
+audio, media transport, and close controls together with Escape dismissal and
+focus restoration; and `selvage.rs` holds the pure mark diff used to reconcile
+Selvage marks in place. Active-context, media, and clock have no standalone
+widget: active context and the clock are rendered into Ribbon labels, and media
+transport is rendered into the Panel controls, so no separate module is
+retained for them.
+
+Boundaries are established where each subsystem has distinct ownership, failure,
+and testing requirements.

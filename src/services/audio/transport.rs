@@ -223,7 +223,10 @@ pub async fn run(
             }
         }
 
-        let _ = handle.join();
+        // Join the PipeWire loop thread off the Tokio worker so a slow or stuck
+        // teardown never blocks the async runtime; the loop was already asked to
+        // quit above, so this only awaits its exit.
+        let _ = tokio::task::spawn_blocking(move || handle.join()).await;
         if cancellation.is_cancelled() {
             return;
         }

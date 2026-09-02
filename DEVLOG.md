@@ -6,6 +6,43 @@ or unmeasured. Planned work is never presented as implemented behavior.
 
 ---
 
+## 2026-09-02 - Off-GTK-thread shutdown join and widget module extraction
+
+The application supervisor no longer busy-waits the calling (GTK) thread during
+shutdown. It broadcasts cooperative cancellation, then joins the owned tasks
+under the bounded 100-millisecond grace inside a dedicated current-thread
+runtime on a separate OS thread. Tasks still running at the deadline are aborted
+and then awaited, and every join result is reaped, so a panicked adapter is
+observed as a redacted category count (task identity, payload, and panic message
+are never retained) rather than being silently dropped. The PipeWire loop-thread
+join in the audio transport now runs on the Tokio blocking pool instead of a
+worker so a slow teardown cannot block the async runtime. The drain logic is
+GTK-free and covered by tests that spawn plain Tokio tasks: a cancellation-
+ignoring task is aborted at the deadline, a panicking task is reaped as a
+category count, cooperative tasks complete well within the deadline, and the
+off-thread wrapper reaps finished tasks.
+
+The widget layer now matches its documented module boundaries. Ribbon
+construction (revealer, activation button, and navigation, context, and status
+labels) moved into `src/widgets/ribbon.rs`, and Panel construction (the attached
+popover with audio, media transport, and close controls, plus Escape dismissal
+and focus restoration) moved into `src/widgets/panel.rs`. The root
+`TopEdgeWidgets` in `widgets/mod.rs` now holds those as `ribbon` and `panel`
+sub-structs and renders projections into them unchanged. The comment-only
+`active_context.rs`, `clock.rs`, and `media.rs` stubs were deleted because those
+concerns render into Ribbon labels and Panel controls and have no standalone
+widget; `docs/architecture.md` describes the resulting structure. `mod.rs`
+dropped from 715 to 541 lines and every touched file stays under the size caps.
+
+Verified on the host: formatting, deny-warning Clippy across all targets, the
+full locked test suite (including the four new supervisor shutdown tests),
+documentation warnings, the `audio-transport` feature check, and the worktree
+public-safety scan. This change preserves existing widget behavior; runtime
+adapter-panic reaping and the on-thread teardown timing are exercised by the new
+GTK-free tests but were not measured in a live desktop session.
+
+---
+
 ## 2026-09-02 - Hyprland discovery test seam and retained Selvage marks
 
 The Hyprland adapter exposes a public discovery seam: `run_with_discovery`

@@ -1,1 +1,0 @@
-//! Active compositor context projection.
