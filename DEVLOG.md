@@ -6,6 +6,41 @@ or unmeasured. Planned work is never presented as implemented behavior.
 
 ---
 
+## 2026-09-02 - Hyprland discovery test seam and retained Selvage marks
+
+The Hyprland adapter exposes a public discovery seam: `run_with_discovery`
+accepts an injected runtime scan and process-liveness probe, and `run` is now a
+thin wrapper that reads both from the environment and delegates, degrading to an
+unavailable-retry loop when the user runtime directory is missing. The seam lets
+a hermetic transport harness rotate synthetic instance directories and drive the
+exact reconnect, snapshot-ordering, and per-record tolerance path without a live
+compositor. Wayland-display affinity now reads the display token from the
+instance lock's second line, which the compositor writes after the PID, and
+falls back to the log scan only when the lock declares no display. During
+snapshotting, a known event whose payload fails to parse now taints the read and
+retakes the snapshot exactly once, since a tracked change was observed but its
+content is unrecoverable; the pre-snapshot buffer is discarded because the fresh
+snapshot supersedes it.
+
+Selvage marks are no longer destroyed and rebuilt every render. A new pure,
+GTK-free `diff_marks` in `src/widgets/selvage.rs` plans reconciliation from the
+previous and next mark keys, and each region retains its widgets across renders:
+workspace marks are keyed by workspace id and status marks by their stable region
+slot, so a matched widget is updated in place, only new marks are created, only
+vanished marks are removed, and a widget is recreated only when its accessible
+role changes. This retains tooltips and accessible objects instead of recreating
+them each frame.
+
+Verified on the host: formatting, deny-warning Clippy across all targets, the
+full locked test suite (156 library tests, plus the new `diff_marks`,
+lock-display-affinity, and lost-payload-taint unit tests), documentation
+warnings, the shared-module `audio-transport` feature check, and the worktree
+public-safety scan. Live-session Hyprland recovery and on-screen mark
+reconciliation remain unmeasured here; the hermetic transport harness is a
+separate test task.
+
+---
+
 ## 2026-09-02 - Hyprland live-instance rediscovery and per-record tolerance
 
 The Hyprland adapter now rediscovers the live compositor instance on every

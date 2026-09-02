@@ -1,6 +1,9 @@
 //! Relm4 presentation components.
 
-use std::{cell::Cell, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 
 use gtk4_layer_shell::{KeyboardMode, LayerShell};
 use relm4::gtk;
@@ -12,8 +15,10 @@ use crate::action::AppAction;
 use crate::config::ThemeConfig;
 use crate::context::arbitration::{CandidateAction, Severity};
 use crate::state::{
-    MarkPattern, MarkShape, OutputId, OutputView, PresentationLevel, StatusMark, WorkspaceMark,
+    MarkPattern, MarkShape, OutputId, OutputView, PresentationLevel, StatusMark, WorkspaceId,
+    WorkspaceMark,
 };
+use crate::widgets::selvage::{MarkOp, diff_marks};
 
 pub mod active_context;
 pub mod clock;
@@ -79,6 +84,9 @@ pub(crate) struct TopEdgeWidgets {
     navigation_marks: gtk::Box,
     activity_marks: gtk::Box,
     attention_marks: gtk::Box,
+    navigation_retained: RefCell<Vec<RetainedMark<WorkspaceId, WorkspaceMark>>>,
+    activity_retained: RefCell<Vec<RetainedMark<usize, StatusMark>>>,
+    attention_retained: RefCell<Vec<RetainedMark<usize, StatusMark>>>,
     popover: gtk::Popover,
     first_panel_action: gtk::Button,
     close_button: gtk::Button,
@@ -342,6 +350,9 @@ impl TopEdgeWidgets {
             navigation_marks,
             activity_marks,
             attention_marks,
+            navigation_retained: RefCell::new(Vec::new()),
+            activity_retained: RefCell::new(Vec::new()),
+            attention_retained: RefCell::new(Vec::new()),
             popover,
             first_panel_action,
             close_button,
@@ -380,24 +391,21 @@ impl TopEdgeWidgets {
         ] {
             label.set_tooltip_text(Some(&view.ribbon_accessible_label));
         }
-        while let Some(child) = self.navigation_marks.first_child() {
-            self.navigation_marks.remove(&child);
-        }
-        for workspace in &view.workspaces {
-            self.navigation_marks.append(&workspace_mark(workspace));
-        }
-        while let Some(child) = self.activity_marks.first_child() {
-            self.activity_marks.remove(&child);
-        }
-        for status in &view.activity {
-            self.activity_marks.append(&status_mark(status));
-        }
-        while let Some(child) = self.attention_marks.first_child() {
-            self.attention_marks.remove(&child);
-        }
-        for status in &view.attention {
-            self.attention_marks.append(&status_mark(status));
-        }
+        reconcile_workspace_marks(
+            &self.navigation_marks,
+            &self.navigation_retained,
+            &view.workspaces,
+        );
+        reconcile_status_marks(
+            &self.activity_marks,
+            &self.activity_retained,
+            &view.activity,
+        );
+        reconcile_status_marks(
+            &self.attention_marks,
+            &self.attention_retained,
+            &view.attention,
+        );
         for (action, button) in &self.candidate_controls {
             button.set_visible(view.candidate_actions.contains(action));
         }
@@ -470,66 +478,226 @@ fn pointer_entry_is_immediate(
     x < f64::from(corner_width) || x >= f64::from(surface_width.saturating_sub(corner_width))
 }
 
-fn workspace_mark(workspace: &WorkspaceMark) -> gtk::Label {
+/// One retained Selvage mark: its stable key, last-rendered model, and widget.
+struct RetainedMark<K, M> {
+    key: K,
+    model: M,
+    widget: gtk::Label,
+}
+
+/// Reconcile a Selvage region's retained mark widgets against a new projection.
+///
+/// [`diff_marks`] plans which widgets to reuse, create, or remove; matched
+/// widgets are updated in place only when their model actually changed, and are
+/// reordered to the projection's order. This keeps tooltips and accessible
+/// objects alive across renders instead of destroying and rebuilding them.
+fn reconcile_region<K, M>(
+    container: &gtk::Box,
+    retained: &RefCell<Vec<RetainedMark<K, M>>>,
+    next_models: &[M],
+    key_of: impl Fn(usize, &M) -> K,
+    build: impl Fn(&M) -> gtk::Label,
+    apply: impl Fn(&gtk::Label, &M),
+    needs_recreate: impl Fn(&M, &M) -> bool,
+) where
+    K: Eq + Clone,
+    M: Clone + PartialEq,
+{
+    let mut current = retained.borrow_mut();
+    let prev_keys: Vec<K> = current.iter().map(|mark| mark.key.clone()).collect();
+    let next_keys: Vec<K> = next_models
+        .iter()
+        .enumerate()
+        .map(|(index, model)| key_of(index, model))
+        .collect();
+    let ops = diff_marks(&prev_keys, &next_keys);
+
+    // Take ownership of the retained widgets so operations can move them.
+    let mut old: Vec<Option<RetainedMark<K, M>>> = current.drain(..).map(Some).collect();
+    let mut next_retained: Vec<RetainedMark<K, M>> = Vec::with_capacity(next_models.len());
+    for op in &ops {
+        match *op {
+            MarkOp::Remove { prev } => {
+                if let Some(mark) = old[prev].take() {
+                    container.remove(&mark.widget);
+                }
+            }
+            MarkOp::Reuse { prev, next } => {
+                let existing = old[prev].take().expect("reused mark is present");
+                let model = &next_models[next];
+                if needs_recreate(&existing.model, model) {
+                    container.remove(&existing.widget);
+                    let widget = build(model);
+                    container.append(&widget);
+                    next_retained.push(RetainedMark {
+                        key: next_keys[next].clone(),
+                        model: model.clone(),
+                        widget,
+                    });
+                } else {
+                    if existing.model != *model {
+                        apply(&existing.widget, model);
+                    }
+                    next_retained.push(RetainedMark {
+                        key: next_keys[next].clone(),
+                        model: model.clone(),
+                        widget: existing.widget,
+                    });
+                }
+            }
+            MarkOp::Create { next } => {
+                let model = &next_models[next];
+                let widget = build(model);
+                container.append(&widget);
+                next_retained.push(RetainedMark {
+                    key: next_keys[next].clone(),
+                    model: model.clone(),
+                    widget,
+                });
+            }
+        }
+    }
+
+    // Place each widget after its predecessor to match the projection's order.
+    let mut previous: Option<gtk::Label> = None;
+    for mark in &next_retained {
+        container.reorder_child_after(&mark.widget, previous.as_ref());
+        previous = Some(mark.widget.clone());
+    }
+
+    *current = next_retained;
+}
+
+/// Reconcile the navigation region's workspace marks, keyed by workspace id.
+fn reconcile_workspace_marks(
+    container: &gtk::Box,
+    retained: &RefCell<Vec<RetainedMark<WorkspaceId, WorkspaceMark>>>,
+    next: &[WorkspaceMark],
+) {
+    reconcile_region(
+        container,
+        retained,
+        next,
+        |_index, model| model.id,
+        build_workspace_mark,
+        apply_workspace_mark,
+        |_previous, _next| false,
+    );
+}
+
+/// Reconcile an activity or attention region's status marks, keyed by their
+/// stable region slot. A slot whose accessible role would change is recreated
+/// because a GTK accessible role is fixed at construction.
+fn reconcile_status_marks(
+    container: &gtk::Box,
+    retained: &RefCell<Vec<RetainedMark<usize, StatusMark>>>,
+    next: &[StatusMark],
+) {
+    reconcile_region(
+        container,
+        retained,
+        next,
+        |index, _model| index,
+        build_status_mark,
+        apply_status_mark,
+        |previous, next| status_role(previous) != status_role(next),
+    );
+}
+
+fn build_workspace_mark(workspace: &WorkspaceMark) -> gtk::Label {
     let mark = gtk::Label::builder()
-        .label(&workspace.accessible_label)
         .accessible_role(gtk::AccessibleRole::ListItem)
-        .width_request(if workspace.active { 22 } else { 14 })
         .height_request(SELVAGE_HEIGHT)
         .build();
-    mark.add_css_class("weftwise-workspace-mark");
-    add_mark_semantics(&mark, workspace.shape, workspace.pattern);
-    if workspace.active {
-        mark.add_css_class("active");
-    } else if workspace.occupied {
-        mark.add_css_class("occupied");
-    }
+    apply_workspace_mark(&mark, workspace);
+    mark
+}
+
+fn apply_workspace_mark(mark: &gtk::Label, workspace: &WorkspaceMark) {
+    mark.set_label(&workspace.accessible_label);
+    mark.set_width_request(if workspace.active { 22 } else { 14 });
+    mark.set_css_classes(&workspace_mark_classes(workspace));
     mark.set_tooltip_text(Some(&workspace.accessible_label));
-    mark
 }
 
-fn status_mark(status: &StatusMark) -> gtk::Label {
-    let width = status
+fn workspace_mark_classes(workspace: &WorkspaceMark) -> Vec<&'static str> {
+    let mut classes = vec![
+        "weftwise-workspace-mark",
+        shape_class(workspace.shape),
+        pattern_class(workspace.pattern),
+    ];
+    if workspace.active {
+        classes.push("active");
+    } else if workspace.occupied {
+        classes.push("occupied");
+    }
+    classes
+}
+
+fn status_role(status: &StatusMark) -> gtk::AccessibleRole {
+    if status.progress_basis_points.is_some() {
+        gtk::AccessibleRole::ProgressBar
+    } else if status.severity >= Severity::Warning {
+        gtk::AccessibleRole::Alert
+    } else {
+        gtk::AccessibleRole::Status
+    }
+}
+
+fn status_mark_width(status: &StatusMark) -> i32 {
+    status
         .progress_basis_points
-        .map_or(14, |progress| 8 + i32::from(progress) * 22 / 10_000);
+        .map_or(14, |progress| 8 + i32::from(progress) * 22 / 10_000)
+}
+
+fn build_status_mark(status: &StatusMark) -> gtk::Label {
     let mark = gtk::Label::builder()
-        .label(&status.accessible_label)
-        .accessible_role(if status.progress_basis_points.is_some() {
-            gtk::AccessibleRole::ProgressBar
-        } else if status.severity >= Severity::Warning {
-            gtk::AccessibleRole::Alert
-        } else {
-            gtk::AccessibleRole::Status
-        })
-        .width_request(width)
+        .accessible_role(status_role(status))
         .height_request(SELVAGE_HEIGHT)
         .build();
-    mark.add_css_class("weftwise-status-mark");
-    add_mark_semantics(&mark, status.shape, status.pattern);
-    match status.severity {
-        Severity::Normal => mark.add_css_class("normal"),
-        Severity::Notice => mark.add_css_class("notice"),
-        Severity::Warning => mark.add_css_class("warning"),
-        Severity::Critical => mark.add_css_class("critical"),
-    }
-    if status.selected {
-        mark.add_css_class("selected");
-    }
-    mark.set_tooltip_text(Some(&status.accessible_label));
+    apply_status_mark(&mark, status);
     mark
 }
 
-fn add_mark_semantics(mark: &impl IsA<gtk::Widget>, shape: MarkShape, pattern: MarkPattern) {
-    match shape {
-        MarkShape::Dot => mark.add_css_class("shape-dot"),
-        MarkShape::Bar => mark.add_css_class("shape-bar"),
-        MarkShape::Diamond => mark.add_css_class("shape-diamond"),
-        MarkShape::Triangle => mark.add_css_class("shape-triangle"),
+fn apply_status_mark(mark: &gtk::Label, status: &StatusMark) {
+    mark.set_label(&status.accessible_label);
+    mark.set_width_request(status_mark_width(status));
+    mark.set_css_classes(&status_mark_classes(status));
+    mark.set_tooltip_text(Some(&status.accessible_label));
+}
+
+fn status_mark_classes(status: &StatusMark) -> Vec<&'static str> {
+    let mut classes = vec![
+        "weftwise-status-mark",
+        shape_class(status.shape),
+        pattern_class(status.pattern),
+    ];
+    classes.push(match status.severity {
+        Severity::Normal => "normal",
+        Severity::Notice => "notice",
+        Severity::Warning => "warning",
+        Severity::Critical => "critical",
+    });
+    if status.selected {
+        classes.push("selected");
     }
+    classes
+}
+
+fn shape_class(shape: MarkShape) -> &'static str {
+    match shape {
+        MarkShape::Dot => "shape-dot",
+        MarkShape::Bar => "shape-bar",
+        MarkShape::Diamond => "shape-diamond",
+        MarkShape::Triangle => "shape-triangle",
+    }
+}
+
+fn pattern_class(pattern: MarkPattern) -> &'static str {
     match pattern {
-        MarkPattern::Outline => mark.add_css_class("pattern-outline"),
-        MarkPattern::Solid => mark.add_css_class("pattern-solid"),
-        MarkPattern::Striped => mark.add_css_class("pattern-striped"),
+        MarkPattern::Outline => "pattern-outline",
+        MarkPattern::Solid => "pattern-solid",
+        MarkPattern::Striped => "pattern-striped",
     }
 }
 

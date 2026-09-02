@@ -319,14 +319,20 @@ directory as an owned, non-symlink directory whose `.socket.sock` and
 (parsed defensively from the instance lock or log and confirmed absent under
 `/proc`) excludes a candidate, while an unparseable or unknown PID is retained.
 Candidates are ranked deterministically by Wayland-display affinity, signature
-timestamp, lock or directory recency, then lexically. Ranking is only an
+timestamp, lock or directory recency, then lexically. Wayland-display affinity
+reads the display token from the instance lock's second line, which the
+compositor writes directly after the PID, and falls back to scanning the log
+only when the lock declares no display. Ranking is only an
 ordering hint: the authoritative liveness proof is a successful event-socket
 connection plus a complete five-request snapshot, so a stale directory that
 ranks first is skipped when it fails to answer. No empty request-socket probe is
 used. The adapter connects the newline-delimited event socket first; while five
 JSON snapshots are requested through fresh, strictly timed, size-bounded request
 connections, parsed events enter a count- and byte-bounded buffer, and the root
-receives one atomic snapshot before those events replay in wire order.
+receives one atomic snapshot before those events replay in wire order. If a
+known event loses its payload while the snapshot is being taken, the snapshot is
+retaken exactly once: a tracked change was observed but its content is
+unrecoverable, so the first read may already be stale.
 
 Event records split only at the first `>>` and are tolerated per record. An
 over-long line is discarded to the next newline and skipped rather than ending
@@ -348,8 +354,10 @@ process: on reconnect it rediscovers the new instance and re-establishes state.
 GTK's Wayland connection is still closed when the compositor exits, so the
 layer-shell surfaces themselves do not claim same-process survival of a full
 restart; native acceptance for that lifecycle starts a fresh process after an
-orderly session cycle. Synthetic transport tests rotate safe instance
-directories without implying GTK survival.
+orderly session cycle. A public discovery seam accepts an injected runtime scan
+and process-liveness probe, so synthetic transport tests rotate safe instance
+directories and exercise the exact reconnect, ordering, and per-record tolerance
+path without a live compositor and without implying GTK survival.
 The clock is a separate supervised in-process adapter and aligns each update to
 the next wall-clock minute rather than spawning or periodically drifting.
 Synchronous application shutdown first broadcasts cooperative cancellation,
@@ -432,7 +440,14 @@ bounded workspace marks, bounded activity and attention marks, selected typed
 actions, and an active candidate label or compositor/clock fallback. The
 Selvage uses stable navigation/activity/attention thirds. Shape, width, fill
 pattern, visible text after reveal, and accessible labels encode state in
-addition to color; GTK widgets do not retain arbitration state.
+addition to color; GTK widgets do not retain arbitration state. Each Selvage
+region reconciles its mark widgets against the new projection with a pure
+key-diff rather than rebuilding them every render: workspace marks are keyed by
+workspace id and status marks by their stable region slot, so a matched widget
+is updated in place, only genuinely new marks are created, only vanished marks
+are removed, and a widget is recreated only when its accessible role changes.
+This retains tooltips and accessible objects across renders and avoids
+widget-lifetime churn during rapid state updates.
 
 ## Configuration
 

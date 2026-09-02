@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 use std::io;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde::Deserialize;
@@ -36,6 +37,8 @@ pub const MAX_BUFFERED_EVENT_BYTES: usize = 256 * 1024;
 const REQUEST_DEADLINE: Duration = Duration::from_millis(900);
 /// Maximum in-place snapshot repairs before a session falls back to reconnect.
 pub const MAX_GAP_REPAIRS: u32 = 3;
+/// Maximum snapshot attempts when a lost event payload taints the read.
+const MAX_SNAPSHOT_ATTEMPTS: u32 = 2;
 
 /// Structured parser failure; raw desktop data is never included.
 #[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
@@ -612,20 +615,45 @@ impl Boolish {
     }
 }
 
-/// Run the independently reconnecting adapter until cancellation.
+/// Run the independently reconnecting adapter using the process environment.
+///
+/// This is a thin wrapper that reads the discovery scan and process probe from
+/// the environment and delegates to [`run_with_discovery`]. When the user
+/// runtime directory is unavailable, it degrades to an unavailable adapter that
+/// keeps retrying under backoff.
+pub async fn run<Emit>(emit: Emit, cancellation: Cancellation)
+where
+    Emit: Fn(HyprlandUpdate) + Send + Sync + 'static,
+{
+    match InstanceScan::from_environment() {
+        Ok(scan) => run_with_discovery(scan, Arc::new(ProcProbe), emit, cancellation).await,
+        Err(error) => run_without_runtime(error, &emit, cancellation).await,
+    }
+}
+
+/// Run the adapter against an injected discovery scan and process probe.
 ///
 /// The environment signature is trusted only for the first connection; every
 /// reconnect rescans the runtime directory so a compositor restart is followed
 /// to its new instance rather than retrying a stale socket path.
-pub async fn run<Emit>(emit: Emit, mut cancellation: Cancellation)
-where
+///
+/// This is the seam used by the hermetic transport harness: `scan` can point at
+/// a controlled runtime directory and `probe` can report synthetic liveness,
+/// while the reconnect, snapshot ordering, and per-record tolerance logic is
+/// exactly the production path.
+pub async fn run_with_discovery<Emit>(
+    scan: InstanceScan,
+    probe: Arc<dyn ProcessProbe + Send + Sync>,
+    emit: Emit,
+    mut cancellation: Cancellation,
+) where
     Emit: Fn(HyprlandUpdate) + Send + Sync + 'static,
 {
     let mut backoff = ReconnectBackoff::default();
     let mut prefer_environment = true;
     loop {
         emit(HyprlandUpdate::Connecting);
-        let connection = run_connection(&emit, prefer_environment);
+        let connection = run_connection(&scan, probe.as_ref(), &emit, prefer_environment);
         let (error, initialized) = tokio::select! {
             result = connection => result,
             () = cancellation.cancelled() => return,
@@ -649,16 +677,47 @@ where
     }
 }
 
-/// Resolve ranked instance candidates for one connection attempt.
-fn resolve_candidates(prefer_environment: bool) -> Result<Vec<SocketPaths>, DiscoveryError> {
-    let scan = InstanceScan::from_environment()?;
+/// Degrade cleanly when the user runtime directory cannot be resolved: report
+/// the adapter as unavailable and keep retrying under backoff until
+/// cancellation, matching the prior per-attempt discovery-failure behavior.
+async fn run_without_runtime<Emit>(
+    error: DiscoveryError,
+    emit: &Emit,
+    mut cancellation: Cancellation,
+) where
+    Emit: Fn(HyprlandUpdate) + Send + Sync,
+{
+    let mut backoff = ReconnectBackoff::default();
+    loop {
+        emit(HyprlandUpdate::Connecting);
+        emit(HyprlandUpdate::Unavailable);
+        tracing::warn!(reason = %error, "Hyprland adapter will reconnect");
+        let delay = backoff.next_delay();
+        tokio::select! {
+            () = tokio::time::sleep(delay) => {}
+            () = cancellation.cancelled() => return,
+        }
+    }
+}
+
+/// Resolve ranked instance candidates for one connection attempt using the
+/// injected scan and process probe.
+fn resolve_candidates(
+    scan: &InstanceScan,
+    probe: &dyn ProcessProbe,
+    prefer_environment: bool,
+) -> Result<Vec<SocketPaths>, DiscoveryError> {
     let uid = current_uid().ok_or(DiscoveryError::OwnerUnavailable)?;
-    match scan_instances(&scan, uid, prefer_environment, &ProcProbe) {
+    match scan_instances(scan, uid, prefer_environment, probe) {
         Ok(candidates) => Ok(candidates),
         // First-connection fast path when the runtime directory cannot be
         // scanned but the environment signature is present and valid.
         Err(DiscoveryError::NoLiveInstance) if prefer_environment => {
-            SocketPaths::discover().map(|paths| vec![paths])
+            let environment = DiscoveryEnvironment {
+                runtime_dir: Some(scan.runtime_dir.clone()),
+                instance_signature: scan.environment_signature.clone(),
+            };
+            SocketPaths::from_environment(&environment).map(|paths| vec![paths])
         }
         Err(error) => Err(error),
     }
@@ -666,11 +725,16 @@ fn resolve_candidates(prefer_environment: bool) -> Result<Vec<SocketPaths>, Disc
 
 /// Try each ranked candidate in order until one connects and answers a complete
 /// snapshot, then run its event loop until an error requires reconnecting.
-async fn run_connection<Emit>(emit: &Emit, prefer_environment: bool) -> (AdapterError, bool)
+async fn run_connection<Emit>(
+    scan: &InstanceScan,
+    probe: &(dyn ProcessProbe + Send + Sync),
+    emit: &Emit,
+    prefer_environment: bool,
+) -> (AdapterError, bool)
 where
     Emit: Fn(HyprlandUpdate) + Send + Sync,
 {
-    let candidates = match resolve_candidates(prefer_environment) {
+    let candidates = match resolve_candidates(scan, probe, prefer_environment) {
         Ok(candidates) => candidates,
         Err(error) => return (error.into(), false),
     };
@@ -900,20 +964,39 @@ async fn take_snapshot(
     reader: &mut BufReader<UnixStream>,
     buffer: &mut EventBuffer,
 ) -> Result<HyprlandSnapshot, AdapterError> {
-    let monitors = request_while_buffering(paths, "j/monitors", reader, buffer).await?;
-    let workspaces = request_while_buffering(paths, "j/workspaces", reader, buffer).await?;
-    let clients = request_while_buffering(paths, "j/clients", reader, buffer).await?;
-    let active_workspace =
-        request_while_buffering(paths, "j/activeworkspace", reader, buffer).await?;
-    let active_window = request_while_buffering(paths, "j/activewindow", reader, buffer).await?;
-    parse_snapshot_json(
-        &monitors,
-        &workspaces,
-        &clients,
-        &active_workspace,
-        &active_window,
-    )
-    .map_err(Into::into)
+    let mut attempt: u32 = 0;
+    loop {
+        attempt += 1;
+        let mut tainted = false;
+        let monitors =
+            request_while_buffering(paths, "j/monitors", reader, buffer, &mut tainted).await?;
+        let workspaces =
+            request_while_buffering(paths, "j/workspaces", reader, buffer, &mut tainted).await?;
+        let clients =
+            request_while_buffering(paths, "j/clients", reader, buffer, &mut tainted).await?;
+        let active_workspace =
+            request_while_buffering(paths, "j/activeworkspace", reader, buffer, &mut tainted)
+                .await?;
+        let active_window =
+            request_while_buffering(paths, "j/activewindow", reader, buffer, &mut tainted).await?;
+        let snapshot = parse_snapshot_json(
+            &monitors,
+            &workspaces,
+            &clients,
+            &active_workspace,
+            &active_window,
+        )?;
+        if tainted && attempt < MAX_SNAPSHOT_ATTEMPTS {
+            // A known event lost its payload mid-snapshot: a tracked change was
+            // observed but its content is unrecoverable, so this snapshot may
+            // already be stale. Discard the pre-snapshot buffer, since the fresh
+            // snapshot supersedes it, and retake exactly once.
+            for _ in buffer.drain() {}
+            tracing::debug!("retaking Hyprland snapshot after a lost event payload");
+            continue;
+        }
+        return Ok(snapshot);
+    }
 }
 
 async fn request_while_buffering(
@@ -921,6 +1004,7 @@ async fn request_while_buffering(
     command: &'static str,
     reader: &mut BufReader<UnixStream>,
     buffer: &mut EventBuffer,
+    tainted: &mut bool,
 ) -> Result<String, AdapterError> {
     let request = request_json(paths.request(), command);
     tokio::pin!(request);
@@ -931,6 +1015,9 @@ async fn request_while_buffering(
                 match record? {
                     EventRecord::Complete(bytes) => {
                         if let Ok(text) = std::str::from_utf8(&bytes) {
+                            if record_lost_tracked_change(text) {
+                                *tainted = true;
+                            }
                             buffer.observe_record(text)?;
                         }
                     }
@@ -941,6 +1028,18 @@ async fn request_while_buffering(
             }
         }
     }
+}
+
+/// Whether a buffered record is a known event whose payload failed to parse.
+///
+/// Such a record means a tracked state change happened but its content is lost,
+/// so a snapshot taken across it may be stale and must be retaken. Unknown
+/// names, delimiter-less lines, and lifecycle events are excluded: the former
+/// two cannot have changed tracked state, and lifecycle events are reconciled
+/// by the buffered-event replay and in-place gap-repair path instead.
+fn record_lost_tracked_change(text: &str) -> bool {
+    let trimmed = text.trim_end_matches(['\r', '\n']);
+    trimmed.contains(">>") && parse_event_line(trimmed).is_err()
 }
 
 /// Send one bounded command through a fresh request connection.
@@ -1056,6 +1155,19 @@ mod tests {
             classify_line(&[0xff, 0xfe, 0x00]),
             LineClass::Benign
         ));
+    }
+
+    #[test]
+    fn record_lost_tracked_change_detects_only_malformed_known_events() {
+        // A known event with an unparseable payload lost a tracked change.
+        assert!(record_lost_tracked_change("workspacev2>>notanid,one"));
+        assert!(record_lost_tracked_change("workspacev2>>"));
+        // A well-formed known event (even with a trailing newline) is not tainted.
+        assert!(!record_lost_tracked_change("workspacev2>>1,one\n"));
+        // Unknown names, lifecycle events, and delimiter-less lines are excluded.
+        assert!(!record_lost_tracked_change("futureevent>>opaque"));
+        assert!(!record_lost_tracked_change("monitoraddedv2>>SYNTH-1"));
+        assert!(!record_lost_tracked_change("nodelimiter"));
     }
 
     #[test]

@@ -447,13 +447,30 @@ fn read_instance_pid(directory: &Path) -> Option<i32> {
     })
 }
 
-/// Whether the instance log positively references the current Wayland display.
+/// Whether the instance positively references the current Wayland display.
+///
+/// The lock file is authoritative: Hyprland's `Compositor.cpp` writes the PID on
+/// the first line and the Wayland display on the second. When the lock declares
+/// a display, that value alone decides affinity. Only when no usable display
+/// line is present does discovery fall back to scanning the instance log.
 fn instance_matches_display(directory: &Path, display: &str) -> bool {
+    if let Some(lock_display) = read_lock_display(directory) {
+        return lock_display == display;
+    }
     read_bounded(&directory.join("hyprland.log")).is_some_and(|contents| {
         contents
             .split(|c: char| !is_display_char(c))
             .any(|token| token == display)
     })
+}
+
+/// Read the Wayland display token from the second line of `hyprland.lock`.
+/// Returns `None` when the file is absent, has no second line, or the second
+/// line is not a single safe display token.
+fn read_lock_display(directory: &Path) -> Option<String> {
+    let contents = read_bounded(&directory.join("hyprland.lock"))?;
+    let line = contents.lines().nth(1)?.trim();
+    (!line.is_empty() && line.chars().all(is_display_char)).then(|| line.to_owned())
 }
 
 fn is_display_char(c: char) -> bool {
@@ -618,6 +635,91 @@ mod tests {
         )
         .unwrap();
         assert!(ordered[0].events().ends_with("hypr/b_100/.socket2.sock"));
+    }
+
+    #[test]
+    fn read_lock_display_reads_the_second_line() {
+        let scratch = Scratch::new();
+        let dir = scratch.root.join("hypr").join("inst_1");
+        fs::create_dir_all(&dir).expect("create instance dir");
+        fs::write(dir.join("hyprland.lock"), "1234\nwayland-5\n").expect("write lock");
+        assert_eq!(read_lock_display(&dir), Some("wayland-5".to_owned()));
+        // A lock with only a PID line has no display token.
+        fs::write(dir.join("hyprland.lock"), "1234\n").expect("rewrite lock");
+        assert_eq!(read_lock_display(&dir), None);
+        // A second line that is not a single safe token is rejected.
+        fs::write(dir.join("hyprland.lock"), "1234\nnot a token\n").expect("rewrite lock");
+        assert_eq!(read_lock_display(&dir), None);
+    }
+
+    #[test]
+    fn a_lock_display_line_decides_affinity_over_a_newer_timestamp() {
+        let scratch = Scratch::new();
+        // Newer timestamp, but the lock names a different display.
+        let _newer = make_instance(&scratch, "a_900", true, true, Some(11), None, None);
+        fs::write(
+            scratch
+                .root
+                .join("hypr")
+                .join("a_900")
+                .join("hyprland.lock"),
+            "11\nwayland-3\n",
+        )
+        .expect("rewrite lock a");
+        // Older timestamp, but the lock names the current display.
+        let _match = make_instance(&scratch, "b_100", true, true, Some(22), None, None);
+        fs::write(
+            scratch
+                .root
+                .join("hypr")
+                .join("b_100")
+                .join("hyprland.lock"),
+            "22\nwayland-7\n",
+        )
+        .expect("rewrite lock b");
+        let ordered = scan_instances(
+            &scan_for(&scratch, Some("wayland-7")),
+            uid(),
+            false,
+            &empty_probe(),
+        )
+        .unwrap();
+        assert!(ordered[0].events().ends_with("hypr/b_100/.socket2.sock"));
+    }
+
+    #[test]
+    fn a_lock_display_line_overrides_a_matching_log_token() {
+        // The lock is authoritative: a matching log token must not grant
+        // affinity when the lock's second line names a different display.
+        let scratch = Scratch::new();
+        let _a = make_instance(
+            &scratch,
+            "a_100",
+            true,
+            true,
+            Some(11),
+            None,
+            Some("wayland-7"),
+        );
+        fs::write(
+            scratch
+                .root
+                .join("hypr")
+                .join("a_100")
+                .join("hyprland.lock"),
+            "11\nwayland-2\n",
+        )
+        .expect("rewrite lock");
+        let _b = make_instance(&scratch, "b_900", true, true, None, None, None);
+        let ordered = scan_instances(
+            &scan_for(&scratch, Some("wayland-7")),
+            uid(),
+            false,
+            &empty_probe(),
+        )
+        .unwrap();
+        // Neither instance has affinity, so the newer timestamp ranks first.
+        assert!(ordered[0].events().ends_with("hypr/b_900/.socket2.sock"));
     }
 
     #[test]
