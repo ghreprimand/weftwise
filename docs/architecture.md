@@ -564,5 +564,16 @@ widget: active context and the clock are rendered into Ribbon labels, and media
 transport is rendered into the Panel controls, so no separate module is
 retained for them.
 
+The authoritative state layer is `src/state.rs` (the root `AppState`, its
+reducers, and shared value types) plus sibling modules: `media_types.rs` holds
+the bounded, sanitized MPRIS value types (`MediaPlayerId`, `MediaPlaybackStatus`,
+`MediaMetadata`, `MediaCapabilities`, `MediaPlayer`, and `MediaState`);
+`interaction.rs` holds the deterministic three-level interaction machine
+(`PresentationLevel`, `InteractionInput`, `InteractionEffect`,
+`InteractionToken`, and `OutputPresentation`); and the `*_integration.rs`
+modules and `ribbon_projection.rs` fold each adapter domain into the root
+reducer and project it for rendering. All of these are re-exported from `state`
+so the public paths remain stable.
+
 Boundaries are established where each subsystem has distinct ownership, failure,
 and testing requirements.

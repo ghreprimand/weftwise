@@ -1,9 +1,9 @@
 //! Transport-independent privacy evidence domain.
 //!
 //! This module owns the pure privacy state model and produces privacy
-//! presentation candidates. It performs no D-Bus, PipeWire, or process work: a
-//! future evidence adapter feeds observations in, and arbitration consumes the
-//! candidates emitted here. Every source remains unsupported until its selected
+//! presentation candidates. It performs no D-Bus, PipeWire, or process work:
+//! the logind and PipeWire capture evidence adapters feed observations in, and
+//! arbitration consumes the candidates emitted here. Every source remains unsupported until its selected
 //! adapter explicitly declares it observable. Unsupported detections are not
 //! reported as inactive.
 //!

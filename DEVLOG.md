@@ -6,6 +6,27 @@ or unmeasured. Planned work is never presented as implemented behavior.
 
 ---
 
+## 2026-09-04 - State module split and present-tense adapter prose
+
+The authoritative state module was split along existing boundaries to fall under
+the refactor size target. The bounded, sanitized MPRIS value types moved to
+`src/state/media_types.rs` and the deterministic three-level interaction machine
+moved to `src/state/interaction.rs`, each re-exported from `state` so every
+public path and every importer and test is unchanged. The interaction unit tests
+moved with the machine. `src/state.rs` dropped from 1,940 to roughly 1,375
+lines; the two new modules are well under the size limits.
+
+Stale planned-tense documentation was corrected to match the implemented
+producers. The temporary-feedback module now states that the audio and activity
+integrations feed events in; the privacy module now names the logind and
+PipeWire capture evidence adapters as its sources; and the arbitration source
+comments no longer describe a producer identity as a future addition.
+
+Verified with formatting, deny-warning Clippy over all targets (default and the
+`audio-transport` feature), the locked unit and integration suites,
+documentation build with warnings denied, the file-size check, and the
+public-safety worktree scan. Behavior is unchanged.
+
 ## 2026-09-03 - Service hardening corrections: unified audio generation, FIFO-safe config, pod module, privacy re-affirm
 
 Corrections to the service-boundary work after a second reading of the code.

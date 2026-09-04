@@ -15,7 +15,7 @@ pub const MAX_CANDIDATES: usize = 256;
 pub const MAX_CANDIDATE_LABEL_CHARACTERS: usize = 256;
 /// Maximum accessible characters retained from one producer label.
 pub const MAX_CANDIDATE_ACCESSIBLE_CHARACTERS: usize = 512;
-/// Maximum characters retained for a future producer identity.
+/// Maximum characters retained for a bounded producer identity.
 pub const MAX_CANDIDATE_SOURCE_CHARACTERS: usize = 64;
 /// Maximum absolute seek delta accepted from a media candidate.
 pub const MAXIMUM_MEDIA_SEEK_MILLIS: i64 = 86_400_000;
@@ -96,7 +96,7 @@ pub enum CandidateSource {
     System,
     /// Notification summary adapter.
     Notification,
-    /// A future bounded producer identity.
+    /// A bounded producer identity for sources outside the enumerated set.
     Other(DisplayText),
 }
 

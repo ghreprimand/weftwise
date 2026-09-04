@@ -4,8 +4,8 @@
 //! change: a volume or brightness step, a microphone toggle, a screenshot, or
 //! the result of a launched command. This module owns the pure policy that
 //! turns those events into bounded, self-expiring presentation candidates. It
-//! performs no I/O; a future adapter feeds events in and arbitration consumes
-//! the emitted inputs.
+//! performs no I/O; the audio and activity integrations feed events in and
+//! arbitration consumes the emitted inputs.
 //!
 //! Each feedback kind maps to one stable candidate identity, so repeated
 //! events update a single candidate in place (deduplication) rather than
