@@ -312,6 +312,7 @@ fn audio_snapshot_is_bounded_and_establishes_state_before_following_deltas() {
             nodes,
             default_sink: Some(AudioNodeId::new(0)),
             default_source: Some(AudioNodeId::new(u32::MAX)),
+            generation: Generation::new(1),
             observed_millis: 1,
         }),
         vec![output]
@@ -347,6 +348,7 @@ fn initial_audio_snapshot_does_not_present_an_unknown_volume_as_zero() {
         nodes: vec![placeholder.clone()],
         default_sink: Some(placeholder.id),
         default_source: None,
+        generation: Generation::new(1),
         observed_millis: 1,
     });
     assert!(
@@ -393,6 +395,7 @@ fn audio_retains_stale_state_across_loss_and_recovers_on_a_fresh_snapshot() {
         nodes: vec![initial],
         default_sink: Some(AudioNodeId::new(8)),
         default_source: None,
+        generation: Generation::new(1),
         observed_millis: 1,
     });
     assert_eq!(state.audio.availability, AdapterAvailability::Ready);
@@ -414,6 +417,7 @@ fn audio_retains_stale_state_across_loss_and_recovers_on_a_fresh_snapshot() {
         nodes: vec![recovered],
         default_sink: Some(AudioNodeId::new(9)),
         default_source: None,
+        generation: Generation::new(1),
         observed_millis: 2,
     });
     assert_eq!(state.audio.availability, AdapterAvailability::Ready);
@@ -433,6 +437,7 @@ fn audio_commands_are_capability_gated_and_unsupported_route_actions_are_visible
         nodes: vec![sink, source],
         default_sink: None,
         default_source: None,
+        generation: Generation::new(1),
         observed_millis: 1,
     });
 
@@ -473,6 +478,7 @@ fn audio_service_loss_hotplug_and_recovery_replace_stale_defaults() {
         nodes: vec![first],
         default_sink: Some(AudioNodeId::new(20)),
         default_source: None,
+        generation: Generation::new(1),
         observed_millis: 1,
     });
 
@@ -490,6 +496,7 @@ fn audio_service_loss_hotplug_and_recovery_replace_stale_defaults() {
             nodes: vec![hotplugged],
             default_sink: Some(AudioNodeId::new(21)),
             default_source: None,
+            generation: Generation::new(1),
             observed_millis: 2,
         }),
         vec![output]
@@ -510,6 +517,7 @@ fn route_removal_revokes_move_capability_before_a_new_route_is_offered() {
         nodes: vec![sink],
         default_sink: Some(AudioNodeId::new(30)),
         default_source: None,
+        generation: Generation::new(1),
         observed_millis: 1,
     });
     state.apply_audio_update(AudioUpdate::MovableStreamChanged {
@@ -561,6 +569,7 @@ fn rapid_audio_volume_deltas_coalesce_to_the_latest_default_sink_state() {
         nodes: vec![initial],
         default_sink: Some(AudioNodeId::new(40)),
         default_source: None,
+        generation: Generation::new(1),
         observed_millis: 1,
     });
 

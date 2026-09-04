@@ -178,6 +178,21 @@ impl FeedbackEmitter {
     /// latest pending value and `None` is returned; a later [`Self::flush`]
     /// past the interval emits it.
     pub fn offer(&mut self, event: FeedbackEvent, now: Timestamp) -> Option<ArbitrationInput> {
+        // Bound the untrusted labels at ingress so a rate-limited event cannot
+        // retain an oversized or control-laden string in the pending queue;
+        // build_candidate stays defensive but never sees an unbounded value.
+        let event = FeedbackEvent {
+            label: DisplayText::new(&event.label, FEEDBACK_LABEL_CHARACTERS)
+                .as_str()
+                .to_owned(),
+            accessible_label: DisplayText::new(
+                &event.accessible_label,
+                FEEDBACK_ACCESSIBLE_CHARACTERS,
+            )
+            .as_str()
+            .to_owned(),
+            ..event
+        };
         let kind = event.kind;
         let limits = kind.limits();
         let channel = self.channels.entry(kind).or_default();
@@ -393,6 +408,35 @@ mod tests {
             }
             other => panic!("expected upsert, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn rate_limited_label_is_bounded_before_entering_the_pending_queue() {
+        let mut emitter = FeedbackEmitter::default();
+        // First emit establishes the rate-limit window for this kind.
+        let _ = emitter
+            .offer(FeedbackEvent::new(FeedbackKind::Volume, "50%"), at(0))
+            .expect("initial emit");
+        // A second event inside the interval is coalesced into `pending`; its
+        // untrusted label must already be bounded and control-free there.
+        let noisy = format!(
+            "{}\u{0}\n{}",
+            "y".repeat(FEEDBACK_LABEL_CHARACTERS + 200),
+            "z"
+        );
+        assert!(
+            emitter
+                .offer(FeedbackEvent::new(FeedbackKind::Volume, noisy), at(1))
+                .is_none()
+        );
+        let pending = emitter
+            .channels
+            .get(&FeedbackKind::Volume)
+            .and_then(|channel| channel.pending.as_ref())
+            .expect("pending event retained");
+        assert!(pending.label.chars().count() <= FEEDBACK_LABEL_CHARACTERS);
+        assert!(!pending.label.contains('\u{0}'));
+        assert!(!pending.label.contains('\n'));
     }
 
     #[test]

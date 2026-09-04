@@ -26,12 +26,77 @@ const MPRIS_PATH: &str = "/org/mpris/MediaPlayer2";
 const ROOT_INTERFACE: &str = "org.mpris.MediaPlayer2";
 const PLAYER_INTERFACE: &str = "org.mpris.MediaPlayer2.Player";
 const PROPERTIES_INTERFACE: &str = "org.freedesktop.DBus.Properties";
-const MAX_PLAYERS: usize = 32;
+/// Maximum simultaneously tracked MPRIS players.
+///
+/// The cap is enforced identically on the initial snapshot, the owner-change
+/// path, and the root projection: the lexicographically lowest identities are
+/// retained so admission and eviction are deterministic regardless of arrival
+/// order. The root imports this constant rather than repeating a literal.
+pub const MAX_PLAYERS: usize = 32;
 const COMMAND_CAPACITY: usize = 16;
 const CALL_TIMEOUT: Duration = Duration::from_secs(2);
 const INITIAL_SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(10);
 const PROGRESS_REFRESH: Duration = Duration::from_secs(1);
 const REFRESH_CONCURRENCY: usize = 4;
+
+/// Deterministic outcome of admitting one player identity under [`MAX_PLAYERS`].
+///
+/// The decision keeps the lexicographically lowest identities: an already
+/// tracked or under-cap identity is admitted; at the cap a strictly-lower
+/// newcomer evicts the current greatest; a larger newcomer is rejected. Both
+/// the owner-change path and the root projection route admission through
+/// [`media_admission`] so a bounded inventory can never grow past the cap or
+/// drop deterministically-retained players.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MediaAdmission {
+    /// Insert or update in place; the inventory is under the cap or the
+    /// identity is already tracked.
+    Admit,
+    /// At the cap: evict this greatest identity, then admit the newcomer.
+    Evict(MediaPlayerId),
+    /// At the cap and not strictly lower than the greatest: reject the newcomer.
+    Reject,
+}
+
+/// Maximum accepted encoded body size of an MPRIS property signal.
+pub const MPRIS_SIGNAL_MAX_BYTES: usize = 64 * 1024;
+/// Maximum accepted encoded body size of an MPRIS metadata reply.
+pub const MPRIS_METADATA_MAX_BYTES: usize = 64 * 1024;
+/// Maximum accepted encoded body size of a bus `ListNames` reply.
+pub const MPRIS_LIST_NAMES_MAX_BYTES: usize = 256 * 1024;
+/// Maximum accepted encoded body size of a scalar string property reply.
+pub const MPRIS_STRING_PROP_MAX_BYTES: usize = 4 * 1024;
+
+/// Whether a D-Bus message body is within an encoded-size budget.
+///
+/// The check runs on the raw encoded body length before any deserialization,
+/// so an oversized or hostile reply is rejected before it can allocate a large
+/// typed value. A caller pairs this with the decode step it guards; the decode
+/// closure must not run when this returns `false`.
+#[must_use]
+pub fn dbus_body_within_cap(body_len: usize, cap: usize) -> bool {
+    body_len <= cap
+}
+
+/// Classify one admission under [`MAX_PLAYERS`].
+///
+/// `under_cap_or_present` is `players.len() < MAX_PLAYERS || players.contains_key(&id)`
+/// evaluated by the caller against its own inventory, and `greatest` is the
+/// current largest tracked identity (the last key of an ordered map).
+#[must_use]
+pub fn media_admission(
+    under_cap_or_present: bool,
+    greatest: Option<&MediaPlayerId>,
+    id: &MediaPlayerId,
+) -> MediaAdmission {
+    if under_cap_or_present {
+        MediaAdmission::Admit
+    } else if greatest.is_some_and(|greatest| greatest > id) {
+        MediaAdmission::Evict(greatest.expect("greatest present").clone())
+    } else {
+        MediaAdmission::Reject
+    }
+}
 
 /// Ordered adapter-to-root update.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -280,30 +345,57 @@ async fn run_connection(
                 owners.retain(|_, candidate| candidate != &id);
                 destinations.remove(&id);
                 if let Some(owner) = args.new_owner().as_ref() {
-                    let generation = next_owner_generation(&mut next_generation);
-                    owners.insert(owner.as_str().to_owned(), id.clone());
-                    destinations.insert(id.clone(), OwnerDestination {
-                        unique_owner: owner.as_str().to_owned(),
-                        generation,
-                    });
-                    players.remove(&id);
-                    if let Some(player) = read_player(
-                        &connection,
-                        owner.as_str(),
-                        id.clone(),
-                        elapsed_millis(started),
-                        generation,
-                    ).await {
-                        players.insert(id, player.clone());
-                        publish(MediaUpdate::PlayerChanged {
-                            player,
-                            observed_millis: elapsed_millis(started),
-                        });
+                    // Deterministic MAX_PLAYERS admission on the owner-change
+                    // path: an already-tracked or under-cap identity is
+                    // admitted; at the cap a strictly-lower newcomer evicts the
+                    // greatest and a larger one is rejected, so owner and
+                    // destination bookkeeping cannot grow past the cap.
+                    let admitted = players.len() < MAX_PLAYERS || players.contains_key(&id);
+                    let decision = media_admission(admitted, players.keys().next_back(), &id);
+                    if matches!(decision, MediaAdmission::Reject) {
+                        // A larger newcomer at the cap: the id's tentative
+                        // bookkeeping was already cleared above, so tracking
+                        // nothing keeps the inventory bounded and deterministic.
                     } else {
-                        publish(MediaUpdate::PlayerRemoved {
-                            id,
-                            observed_millis: elapsed_millis(started),
-                        });
+                        let generation = next_owner_generation(&mut next_generation);
+                        players.remove(&id);
+                        if let Some(player) = read_player(
+                            &connection,
+                            owner.as_str(),
+                            id.clone(),
+                            elapsed_millis(started),
+                            generation,
+                        ).await {
+                            // Only a successful read consumes a slot, so evict
+                            // the greatest just before inserting the newcomer.
+                            if let MediaAdmission::Evict(evicted) = decision {
+                                players.remove(&evicted);
+                                destinations.remove(&evicted);
+                                owners.retain(|_, candidate| candidate != &evicted);
+                                dirty_players.remove(&evicted);
+                                publish(MediaUpdate::PlayerRemoved {
+                                    id: evicted,
+                                    observed_millis: elapsed_millis(started),
+                                });
+                            }
+                            owners.insert(owner.as_str().to_owned(), id.clone());
+                            destinations.insert(id.clone(), OwnerDestination {
+                                unique_owner: owner.as_str().to_owned(),
+                                generation,
+                            });
+                            players.insert(id.clone(), player.clone());
+                            publish(MediaUpdate::PlayerChanged {
+                                player,
+                                observed_millis: elapsed_millis(started),
+                            });
+                        } else {
+                            // A failed read admits nothing; the id's bookkeeping
+                            // was already cleared above.
+                            publish(MediaUpdate::PlayerRemoved {
+                                id,
+                                observed_millis: elapsed_millis(started),
+                            });
+                        }
                     }
                 } else {
                     players.remove(&id);
@@ -318,6 +410,20 @@ async fn run_connection(
                     return Err(zbus::Error::Failure("MPRIS property stream ended".to_owned()));
                 };
                 let message = message?;
+                let header = message.header();
+                let Some(sender) = header.sender() else {
+                    continue;
+                };
+                let Some(id) = owners.get(sender.as_str()).cloned() else {
+                    continue;
+                };
+                // Reject an oversized signal body before it deserializes and
+                // allocates its property map, but still mark the player dirty so
+                // a bounded refresh re-reads its real state.
+                if !dbus_body_within_cap(message.body().len(), MPRIS_SIGNAL_MAX_BYTES) {
+                    dirty_players.insert(id);
+                    continue;
+                }
                 let Ok((interface, _, _)) = message.body().deserialize::<(
                     String,
                     HashMap<String, OwnedValue>,
@@ -328,13 +434,6 @@ async fn run_connection(
                 if interface != PLAYER_INTERFACE {
                     continue;
                 }
-                let header = message.header();
-                let Some(sender) = header.sender() else {
-                    continue;
-                };
-                let Some(id) = owners.get(sender.as_str()).cloned() else {
-                    continue;
-                };
                 dirty_players.insert(id);
             }
         }
@@ -348,35 +447,50 @@ async fn initial_snapshot(
     destinations: &mut BTreeMap<MediaPlayerId, OwnerDestination>,
     next_generation: &mut u64,
 ) -> zbus::Result<BTreeMap<MediaPlayerId, MediaPlayer>> {
-    let mut names = bus
-        .list_names()
-        .await?
+    // Read the bus name list through a raw call so the encoded reply is
+    // rejected by size before it deserializes into an owned name vector.
+    let reply = bus.inner().call_method("ListNames", &()).await?;
+    if !dbus_body_within_cap(reply.body().len(), MPRIS_LIST_NAMES_MAX_BYTES) {
+        return Err(zbus::Error::Failure(
+            "MPRIS bus name list exceeded its byte bound".to_owned(),
+        ));
+    }
+    let mut names = reply
+        .body()
+        .deserialize::<Vec<String>>()?
         .into_iter()
         .filter_map(|name| MediaPlayerId::new(name.as_str()))
         .collect::<Vec<_>>();
     names.sort();
-    names.truncate(MAX_PLAYERS);
+    // Read identities in lexical order and admit only successful reads, up to
+    // the cap. Truncating names first would let a leading unreadable name
+    // displace a readable lower-priority one; instead the lowest MAX_PLAYERS
+    // identities that actually read are retained.
     let mut players = BTreeMap::new();
     for id in names {
+        if players.len() >= MAX_PLAYERS {
+            break;
+        }
         let Ok(name) = BusName::try_from(id.as_str()) else {
             continue;
         };
-        if let Ok(owner) = bus.get_name_owner(name).await {
-            let generation = next_owner_generation(next_generation);
-            owners.insert(owner.as_str().to_owned(), id.clone());
-            destinations.insert(
-                id.clone(),
-                OwnerDestination {
-                    unique_owner: owner.as_str().to_owned(),
-                    generation,
-                },
-            );
-            if let Some(player) =
-                read_player(connection, owner.as_str(), id.clone(), 0, generation).await
-            {
-                players.insert(id, player);
-            }
-        }
+        let Ok(owner) = bus.get_name_owner(name).await else {
+            continue;
+        };
+        let generation = next_owner_generation(next_generation);
+        let Some(player) = read_player(connection, owner.as_str(), id.clone(), 0, generation).await
+        else {
+            continue;
+        };
+        owners.insert(owner.as_str().to_owned(), id.clone());
+        destinations.insert(
+            id.clone(),
+            OwnerDestination {
+                unique_owner: owner.as_str().to_owned(),
+                generation,
+            },
+        );
+        players.insert(id, player);
     }
     Ok(players)
 }
@@ -410,46 +524,58 @@ async fn read_player_inner(
     destination: &str,
     id: MediaPlayerId,
 ) -> zbus::Result<MediaPlayer> {
-    let root = Proxy::new(connection, destination, MPRIS_PATH, ROOT_INTERFACE).await?;
-    let player = Proxy::new(connection, destination, MPRIS_PATH, PLAYER_INTERFACE).await?;
-    let identity = root
-        .get_property::<String>("Identity")
-        .await
-        .unwrap_or_else(|_| "Media player".to_owned());
-    let status = player
-        .get_property::<String>("PlaybackStatus")
-        .await
-        .unwrap_or_else(|_| "Unknown".to_owned());
-    let metadata = player
-        .get_property::<HashMap<String, OwnedValue>>("Metadata")
-        .await
-        .unwrap_or_default();
-    let position = player.get_property::<i64>("Position").await.unwrap_or(0);
+    // Every property is read through a raw Properties.Get whose encoded reply
+    // is rejected by size before it deserializes, so a hostile player can
+    // neither allocate without bound nor inject partial state. A missing or
+    // oversized reply falls back to a safe default for that field.
+    let properties = Proxy::new(connection, destination, MPRIS_PATH, PROPERTIES_INTERFACE).await?;
+    let identity = get_property_bounded::<String>(
+        &properties,
+        ROOT_INTERFACE,
+        "Identity",
+        MPRIS_STRING_PROP_MAX_BYTES,
+    )
+    .await
+    .unwrap_or_else(|| "Media player".to_owned());
+    let status = get_property_bounded::<String>(
+        &properties,
+        PLAYER_INTERFACE,
+        "PlaybackStatus",
+        MPRIS_STRING_PROP_MAX_BYTES,
+    )
+    .await
+    .unwrap_or_else(|| "Unknown".to_owned());
+    let metadata = get_property_bounded::<HashMap<String, OwnedValue>>(
+        &properties,
+        PLAYER_INTERFACE,
+        "Metadata",
+        MPRIS_METADATA_MAX_BYTES,
+    )
+    .await
+    .unwrap_or_default();
+    let position = get_property_bounded::<i64>(
+        &properties,
+        PLAYER_INTERFACE,
+        "Position",
+        MPRIS_STRING_PROP_MAX_BYTES,
+    )
+    .await
+    .unwrap_or(0);
+    let capability = |name: &'static str| {
+        get_property_bounded::<bool>(
+            &properties,
+            PLAYER_INTERFACE,
+            name,
+            MPRIS_STRING_PROP_MAX_BYTES,
+        )
+    };
     let capabilities = MediaCapabilities {
-        can_control: player
-            .get_property::<bool>("CanControl")
-            .await
-            .unwrap_or(false),
-        can_play: player
-            .get_property::<bool>("CanPlay")
-            .await
-            .unwrap_or(false),
-        can_pause: player
-            .get_property::<bool>("CanPause")
-            .await
-            .unwrap_or(false),
-        can_previous: player
-            .get_property::<bool>("CanGoPrevious")
-            .await
-            .unwrap_or(false),
-        can_next: player
-            .get_property::<bool>("CanGoNext")
-            .await
-            .unwrap_or(false),
-        can_seek: player
-            .get_property::<bool>("CanSeek")
-            .await
-            .unwrap_or(false),
+        can_control: capability("CanControl").await.unwrap_or(false),
+        can_play: capability("CanPlay").await.unwrap_or(false),
+        can_pause: capability("CanPause").await.unwrap_or(false),
+        can_previous: capability("CanGoPrevious").await.unwrap_or(false),
+        can_next: capability("CanGoNext").await.unwrap_or(false),
+        can_seek: capability("CanSeek").await.unwrap_or(false),
     };
     Ok(MediaPlayer::bounded(
         id,
@@ -460,6 +586,33 @@ async fn read_player_inner(
         capabilities,
         0,
     ))
+}
+
+/// Read one property through a size-bounded raw `Properties.Get`.
+///
+/// The encoded reply body is rejected against `cap` before it deserializes,
+/// then the `v` payload is decoded to the inner `OwnedValue` (matching
+/// `Proxy::get_property`) and converted to the requested type. Any failure,
+/// oversize, or decode error yields `None` so the caller applies a safe
+/// default rather than trusting an unbounded or partial value.
+async fn get_property_bounded<T>(
+    properties: &Proxy<'_>,
+    interface: &str,
+    property: &str,
+    cap: usize,
+) -> Option<T>
+where
+    T: TryFrom<OwnedValue>,
+{
+    let reply = properties
+        .call_method("Get", &(interface, property))
+        .await
+        .ok()?;
+    if !dbus_body_within_cap(reply.body().len(), cap) {
+        return None;
+    }
+    let owned = reply.body().deserialize::<OwnedValue>().ok()?;
+    T::try_from(owned).ok()
 }
 
 fn metadata_from_values(values: &HashMap<String, OwnedValue>, position: i64) -> MediaMetadata {
@@ -560,6 +713,28 @@ fn next_owner_generation(next: &mut u64) -> u64 {
 mod tests {
     use super::*;
     use zbus::zvariant::Value;
+
+    #[test]
+    fn dbus_body_cap_rejects_only_over_the_budget() {
+        // The guard runs on the raw encoded length before any deserialization.
+        assert!(dbus_body_within_cap(0, MPRIS_SIGNAL_MAX_BYTES));
+        assert!(dbus_body_within_cap(
+            MPRIS_SIGNAL_MAX_BYTES,
+            MPRIS_SIGNAL_MAX_BYTES
+        ));
+        assert!(!dbus_body_within_cap(
+            MPRIS_SIGNAL_MAX_BYTES + 1,
+            MPRIS_SIGNAL_MAX_BYTES
+        ));
+
+        // A decode closure paired with the guard must not run over the cap.
+        let mut decoded = false;
+        let body_len = MPRIS_METADATA_MAX_BYTES + 1;
+        if dbus_body_within_cap(body_len, MPRIS_METADATA_MAX_BYTES) {
+            decoded = true;
+        }
+        assert!(!decoded, "decode must be skipped for an over-cap body");
+    }
 
     #[test]
     fn metadata_values_are_bounded_and_invalid_artwork_is_dropped() {

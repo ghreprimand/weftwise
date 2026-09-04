@@ -14,7 +14,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use pipewire::context::ContextRc;
 use pipewire::main_loop::MainLoopRc;
@@ -41,6 +41,9 @@ use crate::services::capture::{
     CaptureKind, CaptureObservation, CaptureTracker, PublishCapture, capture_loss_state,
 };
 use crate::supervisor::{Cancellation, ReconnectBackoff};
+
+/// Interval at which the capture tracker re-affirms its evidence to the root.
+const CAPTURE_REAFFIRM_INTERVAL: Duration = Duration::from_secs(60);
 
 /// The bound `default` metadata proxy retained for route mutation.
 ///
@@ -300,11 +303,28 @@ fn thread_main(
     let nodes: Nodes = Rc::new(RefCell::new(HashMap::new()));
     let defaults = Rc::new(RefCell::new(Defaults::default()));
     let synced = Rc::new(Cell::new(false));
+    // Per-connection sticky endpoint overflow: set the first time the bounded
+    // node inventory rejects a fresh endpoint, so an incomplete node set is
+    // published as Degraded uncertainty rather than a false Ready.
+    let endpoint_overflow = Rc::new(Cell::new(false));
     let default_metadata: DefaultMetadata = Rc::new(RefCell::new(None));
     let started = Instant::now();
     // The capture tracker shares this loop's registry and clock and drives
     // microphone and camera evidence off the same globals as audio nodes.
     let capture = CaptureTracker::new(Arc::clone(&capture_publish), started);
+
+    // Re-affirm capture evidence on a bounded interval so the root refreshes
+    // its age from the current graph without a new observation source; a
+    // continuously active or unknown source is then never aged to false
+    // uncertainty, and only a genuinely silent adapter ages.
+    let reaffirm_capture = Rc::clone(&capture);
+    let reaffirm_timer = main_loop
+        .loop_()
+        .add_timer(move |_expirations| CaptureTracker::reaffirm(&reaffirm_capture));
+    let _ = reaffirm_timer.update_timer(
+        Some(CAPTURE_REAFFIRM_INTERVAL),
+        Some(CAPTURE_REAFFIRM_INTERVAL),
+    );
 
     // Movable-stream tracking shares the same loop. The bounded stream
     // inventory, session policy, metadata handle, and last published selection
@@ -347,6 +367,7 @@ fn thread_main(
     let global_nodes = Rc::clone(&nodes);
     let global_defaults = Rc::clone(&defaults);
     let global_synced = Rc::clone(&synced);
+    let global_overflow = Rc::clone(&endpoint_overflow);
     let global_metadata = Rc::clone(&default_metadata);
     let global_publish = Arc::clone(&publish);
     let global_capture = Rc::clone(&capture);
@@ -367,6 +388,7 @@ fn thread_main(
                 &global_nodes,
                 &global_defaults,
                 &global_synced,
+                &global_overflow,
                 &global_metadata,
                 &global_publish,
                 started,
@@ -402,6 +424,7 @@ fn thread_main(
     let sync_nodes = Rc::clone(&nodes);
     let sync_defaults = Rc::clone(&defaults);
     let sync_synced = Rc::clone(&synced);
+    let sync_overflow = Rc::clone(&endpoint_overflow);
     let sync_publish = Arc::clone(&publish);
     let sync_capture = Rc::clone(&capture);
     let sync_move = move_ctx.clone();
@@ -424,7 +447,20 @@ fn thread_main(
             }
             if !sync_synced.get() && sequence == pending {
                 sync_synced.set(true);
-                publish_snapshot(&sync_nodes, &sync_defaults, &sync_publish, started);
+                publish_snapshot(
+                    &sync_nodes,
+                    &sync_defaults,
+                    &sync_publish,
+                    started,
+                    generation,
+                );
+                // If the bounded inventory rejected an endpoint during the
+                // initial enumeration, the snapshot is partial: follow it with
+                // Degraded so the root marks the connection Stale uncertainty
+                // rather than trusting an incomplete Ready.
+                if sync_overflow.get() {
+                    (sync_publish)(AudioUpdate::Degraded);
+                }
                 // Publish the initial movable-stream selection once enumeration
                 // is complete, gated on the same first barrier as the snapshot.
                 refresh_movable_stream(&sync_move, started);
@@ -464,15 +500,23 @@ fn on_global(
     nodes: &Nodes,
     defaults: &Rc<RefCell<Defaults>>,
     synced: &Rc<Cell<bool>>,
+    endpoint_overflow: &Rc<Cell<bool>>,
     metadata: &DefaultMetadata,
     publish: &Publish,
     started: Instant,
     global: &GlobalObject<&DictRef>,
 ) {
     match global.type_ {
-        ObjectType::Node => {
-            on_node_global(registry, nodes, defaults, synced, publish, started, global)
-        }
+        ObjectType::Node => on_node_global(
+            registry,
+            nodes,
+            defaults,
+            synced,
+            endpoint_overflow,
+            publish,
+            started,
+            global,
+        ),
         ObjectType::Metadata => on_metadata_global(
             registry, nodes, defaults, synced, metadata, publish, started, global,
         ),
@@ -480,11 +524,13 @@ fn on_global(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn on_node_global(
     registry: &RegistryRc,
     nodes: &Nodes,
     defaults: &Rc<RefCell<Defaults>>,
     synced: &Rc<Cell<bool>>,
+    endpoint_overflow: &Rc<Cell<bool>>,
     publish: &Publish,
     started: Instant,
     global: &GlobalObject<&DictRef>,
@@ -497,6 +543,12 @@ fn on_node_global(
     };
     let id = global.id;
     if nodes.borrow().len() >= MAX_AUDIO_NODES && !nodes.borrow().contains_key(&id) {
+        // A fresh endpoint was rejected by the bounded inventory. Mark the
+        // connection degraded once (rising edge, after the initial sync) so an
+        // incomplete endpoint set is never read as an authoritative Ready.
+        if !endpoint_overflow.replace(true) && synced.get() {
+            (publish)(AudioUpdate::Degraded);
+        }
         return;
     }
     let name = props
@@ -692,6 +744,7 @@ fn publish_snapshot(
     defaults: &Rc<RefCell<Defaults>>,
     publish: &Publish,
     started: Instant,
+    generation: Generation,
 ) {
     let defaults = defaults.borrow();
     let borrow = nodes.borrow();
@@ -712,6 +765,7 @@ fn publish_snapshot(
         nodes: snapshot,
         default_sink: resolve(AudioDirection::Sink, defaults.sink_name.as_deref()),
         default_source: resolve(AudioDirection::Source, defaults.source_name.as_deref()),
+        generation,
         observed_millis: elapsed_millis(started),
     });
 }
@@ -1011,33 +1065,66 @@ fn dispatch(
 ) -> (String, Result<(), AudioCommandError>) {
     let borrow = nodes.borrow();
     match command.kind {
-        AudioCommandKind::SetVolume { id, volume } => (
-            "Volume".to_owned(),
-            set_node_props(&borrow, id.get(), Some(volume), None),
-        ),
-        AudioCommandKind::SetMute { id, muted } => (
-            "Mute".to_owned(),
-            set_node_props(&borrow, id.get(), None, Some(muted)),
-        ),
-        AudioCommandKind::ToggleMute { id } => {
-            match borrow.get(&id.get()).map(|entry| !entry.node.muted) {
-                Some(muted) => (
-                    "Mute".to_owned(),
-                    set_node_props(&borrow, id.get(), None, Some(muted)),
-                ),
-                None => ("Mute".to_owned(), Err(AudioCommandError::UnknownNode)),
-            }
+        // Raw, ungenerationed scalar and move requests never reach the transport
+        // from the root, which validates through `AudioState::validate` and
+        // dispatches only the stamped `*On`/`MoveStreamTo` forms. Refusing the
+        // raw variants keeps an unvalidated command from ever executing.
+        AudioCommandKind::SetVolume { .. } => {
+            ("Volume".to_owned(), Err(AudioCommandError::NotReady))
         }
-        AudioCommandKind::SetDefault { direction, id } => (
-            "Route".to_owned(),
-            set_default_node(&borrow, &mv.metadata, direction, id.get()),
-        ),
-        // A raw, ungenerationed move never reaches the transport from the root,
-        // which only dispatches the validated `MoveStreamTo` form. Without a
-        // generation its freshness cannot be verified, so it is refused.
+        AudioCommandKind::SetMute { .. } | AudioCommandKind::ToggleMute { .. } => {
+            ("Mute".to_owned(), Err(AudioCommandError::NotReady))
+        }
+        AudioCommandKind::SetDefault { .. } => {
+            ("Route".to_owned(), Err(AudioCommandError::NotReady))
+        }
         AudioCommandKind::MoveStream { .. } => {
-            ("Route".to_owned(), Err(AudioCommandError::Unsupported))
+            ("Route".to_owned(), Err(AudioCommandError::NotReady))
         }
+        // The stamped scalar forms carry the connection generation the root
+        // validated the command under. The transport re-checks it against the
+        // live connection generation, exactly as MoveStreamTo does, so a
+        // command validated under a prior connection cannot execute against a
+        // reused global id after a reconnect the root has not yet observed.
+        AudioCommandKind::SetVolumeOn {
+            id,
+            volume,
+            generation,
+        } => (
+            "Volume".to_owned(),
+            fresh_or_stale(generation, mv.generation, || {
+                set_node_props(&borrow, id.get(), Some(volume), None)
+            }),
+        ),
+        AudioCommandKind::SetMuteOn {
+            id,
+            muted,
+            generation,
+        } => (
+            "Mute".to_owned(),
+            fresh_or_stale(generation, mv.generation, || {
+                set_node_props(&borrow, id.get(), None, Some(muted))
+            }),
+        ),
+        AudioCommandKind::ToggleMuteOn { id, generation } => (
+            "Mute".to_owned(),
+            fresh_or_stale(generation, mv.generation, || {
+                match borrow.get(&id.get()).map(|entry| !entry.node.muted) {
+                    Some(muted) => set_node_props(&borrow, id.get(), None, Some(muted)),
+                    None => Err(AudioCommandError::UnknownNode),
+                }
+            }),
+        ),
+        AudioCommandKind::SetDefaultOn {
+            direction,
+            id,
+            generation,
+        } => (
+            "Route".to_owned(),
+            fresh_or_stale(generation, mv.generation, || {
+                set_default_node(&borrow, &mv.metadata, direction, id.get())
+            }),
+        ),
         AudioCommandKind::MoveStreamTo {
             stream,
             target,
@@ -1046,6 +1133,25 @@ fn dispatch(
             "Route".to_owned(),
             move_stream(&borrow, mv, stream.get(), target.get(), generation),
         ),
+    }
+}
+
+/// Run a stamped scalar command only if its generation is still the live one.
+///
+/// A command validated at the root under connection generation N can reach the
+/// transport after a reconnect to generation N+1 (the root has not yet
+/// processed the new snapshot); rejecting it here, against the live connection
+/// generation, prevents it from executing on a reused global id. When stale,
+/// `apply` is never invoked, so no property is written.
+fn fresh_or_stale(
+    command: Generation,
+    current: Generation,
+    apply: impl FnOnce() -> Result<(), AudioCommandError>,
+) -> Result<(), AudioCommandError> {
+    if move_is_fresh(command, current) {
+        apply()
+    } else {
+        Err(AudioCommandError::NotReady)
     }
 }
 
@@ -1096,14 +1202,9 @@ fn set_default_node(
 }
 
 fn audio_direction(props: &DictRef) -> Option<AudioDirection> {
-    let class = props.get("media.class")?;
-    if class.contains("Audio/Sink") {
-        Some(AudioDirection::Sink)
-    } else if class.contains("Audio/Source") {
-        Some(AudioDirection::Source)
-    } else {
-        None
-    }
+    // Exact endpoint classification: a decorated or near-match class is not an
+    // endpoint, so a stream or virtual node is never tracked as a sink/source.
+    super::is_audio_endpoint_class(props.get("media.class")?)
 }
 
 fn parse_default_name(value: &str) -> Option<String> {
@@ -1120,4 +1221,36 @@ fn parse_default_name(value: &str) -> Option<String> {
 
 fn elapsed_millis(started: Instant) -> u64 {
     u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+
+    #[test]
+    fn stale_scalar_command_is_refused_without_applying() {
+        // A command stamped under generation 1 dispatched after the live
+        // connection advanced to generation 2 is refused, and the apply closure
+        // (which would write a property) never runs.
+        let applied = Cell::new(false);
+        let result = fresh_or_stale(Generation::new(1), Generation::new(2), || {
+            applied.set(true);
+            Ok(())
+        });
+        assert_eq!(result, Err(AudioCommandError::NotReady));
+        assert!(
+            !applied.get(),
+            "a stale command must not write any property"
+        );
+
+        // A command whose generation still matches the live connection applies.
+        let applied = Cell::new(false);
+        let result = fresh_or_stale(Generation::new(2), Generation::new(2), || {
+            applied.set(true);
+            Ok(())
+        });
+        assert_eq!(result, Ok(()));
+        assert!(applied.get());
+    }
 }

@@ -27,6 +27,16 @@ const CURRENT_INHIBITORS_PROPERTY: &str = "NCurrentInhibitors";
 const CALL_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_INHIBITORS: usize = 256;
 const SIGNAL_CAPACITY: usize = 32;
+/// Interval at which the adapter re-affirms its last classified state.
+///
+/// Re-affirmation refreshes the root's evidence age from the in-memory state
+/// without a new bus call, so a continuously active or inactive inhibitor set
+/// is not aged to false uncertainty; only a genuinely silent adapter ages.
+const PRIVACY_REAFFIRM_INTERVAL: Duration = Duration::from_secs(60);
+/// Maximum accepted encoded body size of a logind property signal.
+pub const LOGIND_SIGNAL_MAX_BYTES: usize = 64 * 1024;
+/// Maximum accepted encoded body size of a `ListInhibitors` reply.
+pub const LOGIND_INHIBITORS_MAX_BYTES: usize = 256 * 1024;
 
 type InhibitorRecord = (String, String, String, String, u32, u32);
 
@@ -108,8 +118,13 @@ async fn run_connection(
     .await
     .map_err(|_| zbus::Error::Failure("logind property subscription timed out".to_owned()))??;
 
-    publish_snapshot(publish, &proxy, started).await?;
+    let mut last_state = publish_snapshot(publish, &proxy, started).await?;
     backoff.reset();
+    // Re-affirm the last classified state on a bounded interval so the root's
+    // evidence age is refreshed without a new bus call. The immediate first
+    // tick is consumed so only later ticks re-affirm.
+    let mut reaffirm = tokio::time::interval(PRIVACY_REAFFIRM_INTERVAL);
+    reaffirm.tick().await;
 
     loop {
         tokio::select! {
@@ -134,6 +149,16 @@ async fn run_connection(
                     ));
                 };
                 let message = message?;
+                // Reject an oversized property signal before it deserializes;
+                // an oversized signal triggers a fresh bounded resnapshot so a
+                // hostile push cannot both allocate unbounded and hide a change.
+                if !crate::services::mpris::dbus_body_within_cap(
+                    message.body().len(),
+                    LOGIND_SIGNAL_MAX_BYTES,
+                ) {
+                    last_state = publish_snapshot(publish, &proxy, started).await?;
+                    continue;
+                }
                 let Ok((interface, changed, invalidated)) = message.body().deserialize::<(
                     String,
                     HashMap<String, OwnedValue>,
@@ -149,7 +174,20 @@ async fn run_connection(
                 {
                     continue;
                 }
-                publish_snapshot(publish, &proxy, started).await?;
+                last_state = publish_snapshot(publish, &proxy, started).await?;
+            }
+            _ = reaffirm.tick() => {
+                // Re-emit the last classified state so the root refreshes the
+                // evidence age without a new bus call; the root treats an
+                // unchanged state as a no-op re-affirm and does not rerender.
+                publish_observation(
+                    publish,
+                    PrivacyUpdate::Observed {
+                        evidence: PrivacyEvidence::IdleInhibitor,
+                        state: last_state,
+                    },
+                    started,
+                );
             }
         }
     }
@@ -159,13 +197,24 @@ async fn publish_snapshot(
     publish: &(impl Fn(PrivacyObservation) + Send + Sync + 'static),
     proxy: &Proxy<'_>,
     started: Instant,
-) -> zbus::Result<()> {
-    let records = tokio::time::timeout(
-        CALL_TIMEOUT,
-        proxy.call::<_, _, Vec<InhibitorRecord>>("ListInhibitors", &()),
-    )
-    .await
-    .map_err(|_| zbus::Error::Failure("logind inhibitor snapshot timed out".to_owned()))??;
+) -> zbus::Result<PrivacyState> {
+    // Use a raw method call so the encoded reply body can be rejected by size
+    // before it deserializes into a typed inhibitor vector; an oversized reply
+    // surfaces as adapter failure (uncertainty), never a false inactive.
+    let reply = tokio::time::timeout(CALL_TIMEOUT, proxy.call_method("ListInhibitors", &()))
+        .await
+        .map_err(|_| zbus::Error::Failure("logind inhibitor snapshot timed out".to_owned()))??;
+    if !crate::services::mpris::dbus_body_within_cap(
+        reply.body().len(),
+        LOGIND_INHIBITORS_MAX_BYTES,
+    ) {
+        return Err(zbus::Error::Failure(
+            "logind inhibitor snapshot exceeded its byte bound".to_owned(),
+        ));
+    }
+    let records: Vec<InhibitorRecord> = reply.body().deserialize().map_err(|_| {
+        zbus::Error::Failure("logind inhibitor snapshot could not be decoded".to_owned())
+    })?;
     let state = idle_inhibitor_state(&records).ok_or_else(|| {
         zbus::Error::Failure("logind inhibitor snapshot exceeded its bound".to_owned())
     })?;
@@ -177,7 +226,7 @@ async fn publish_snapshot(
         },
         started,
     );
-    Ok(())
+    Ok(state)
 }
 
 fn idle_inhibited(records: &[InhibitorRecord]) -> Option<bool> {
@@ -218,11 +267,41 @@ fn elapsed_millis(started: Instant) -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+    use std::time::Instant;
+
     use super::{
         InhibitorRecord, LOGIN1_DESTINATION, LOGIN1_MANAGER, LOGIN1_PATH, MAX_INHIBITORS,
-        idle_inhibited, idle_inhibitor_state,
+        PrivacyObservation, idle_inhibited, idle_inhibitor_state, publish_observation,
     };
-    use crate::context::privacy::PrivacyState;
+    use crate::context::privacy::{PrivacyEvidence, PrivacyState, PrivacyUpdate};
+
+    #[test]
+    fn reaffirm_re_emits_the_last_classified_inhibitor_state() {
+        // The 60-second re-affirm re-publishes the retained state verbatim so
+        // the root refreshes the evidence age without a new bus call.
+        let sink: Arc<Mutex<Vec<PrivacyObservation>>> = Arc::new(Mutex::new(Vec::new()));
+        let collected = Arc::clone(&sink);
+        let publish = move |observation| collected.lock().unwrap().push(observation);
+        let last_state = PrivacyState::Active;
+        publish_observation(
+            &publish,
+            PrivacyUpdate::Observed {
+                evidence: PrivacyEvidence::IdleInhibitor,
+                state: last_state,
+            },
+            Instant::now(),
+        );
+        let observations = sink.lock().unwrap();
+        assert_eq!(observations.len(), 1);
+        assert_eq!(
+            observations[0].update,
+            PrivacyUpdate::Observed {
+                evidence: PrivacyEvidence::IdleInhibitor,
+                state: PrivacyState::Active,
+            }
+        );
+    }
 
     fn record(what: &str) -> InhibitorRecord {
         (

@@ -405,6 +405,13 @@ pub struct MediaState {
     pub players: BTreeMap<MediaPlayerId, MediaPlayer>,
     /// Deterministically selected active player.
     pub active: Option<MediaPlayerId>,
+    /// Owner generation at which each recently removed or evicted player left.
+    ///
+    /// A late `PlayerChanged` that began before an owner vanished carries the
+    /// same or an older generation and must not resurrect the player, while a
+    /// genuine reappearance always carries a strictly newer one. Bounded to
+    /// `MAX_PLAYERS` entries so the fence cannot grow without limit.
+    pub(crate) removed_generation: BTreeMap<MediaPlayerId, u64>,
 }
 
 /// Stable Hyprland workspace identity.
@@ -1223,7 +1230,7 @@ impl AppState {
             candidate_actions: detailed_candidate
                 .map(|projection| projection.actions.clone())
                 .unwrap_or_default(),
-            audio: focused
+            audio: (focused && self.audio.availability == AdapterAvailability::Ready)
                 .then(|| {
                     self.audio
                         .default_sink()
@@ -1907,9 +1914,12 @@ mod tests {
             false,
             true,
         );
-        state
-            .audio
-            .apply_snapshot(vec![sink], Some(AudioNodeId::new(7)), None);
+        state.audio.apply_snapshot(
+            vec![sink],
+            Some(AudioNodeId::new(7)),
+            None,
+            crate::services::audio::Generation::new(1),
+        );
 
         assert!(
             state

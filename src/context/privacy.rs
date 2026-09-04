@@ -25,6 +25,14 @@ use crate::state::DisplayText;
 
 /// Minimum interval a privacy candidate stays selected once shown.
 const PRIVACY_MINIMUM_DISPLAY: Duration = Duration::from_secs(2);
+/// Maximum age of a supported observation before it is aged to `Stale`.
+///
+/// A source that has not refreshed within this window can no longer be trusted
+/// to still reflect reality, so it is aged to conservative uncertainty rather
+/// than left asserting a possibly-stale `Active` or `Inactive`. The clock tick
+/// drives aging at a minute cadence, so the worst-case lag is the threshold
+/// plus one minute.
+pub const PRIVACY_EVIDENCE_MAX_AGE_MILLIS: u64 = 5 * 60 * 1000;
 /// Maximum characters retained for a privacy accessible label.
 const PRIVACY_ACCESSIBLE_CHARACTERS: usize = 128;
 
@@ -202,6 +210,38 @@ impl PrivacyDomain {
         }
     }
 
+    /// Age supported observations to `Stale` once older than the threshold.
+    ///
+    /// A supported source in `Active`, `Inactive`, or `Unknown` whose last
+    /// update is at least [`PRIVACY_EVIDENCE_MAX_AGE_MILLIS`] before `now`
+    /// becomes `Stale`, and its timestamp advances so it is not re-aged every
+    /// tick. `Unsupported`, `Unavailable`, and already-`Stale` sources are
+    /// preserved. A backward or duplicate `now` ages nothing. Returns whether
+    /// any source changed.
+    pub fn expire_stale(&mut self, now: Timestamp) -> bool {
+        let mut changed = false;
+        for record in self.sources.values_mut() {
+            if !record.supported {
+                continue;
+            }
+            if !matches!(
+                record.state,
+                PrivacyState::Active | PrivacyState::Inactive | PrivacyState::Unknown
+            ) {
+                continue;
+            }
+            let age = now
+                .as_millis()
+                .saturating_sub(record.updated_at.as_millis());
+            if age >= PRIVACY_EVIDENCE_MAX_AGE_MILLIS {
+                record.state = PrivacyState::Stale;
+                record.updated_at = now;
+                changed = true;
+            }
+        }
+        changed
+    }
+
     /// Current state of one evidence source.
     #[must_use]
     pub fn state(&self, evidence: PrivacyEvidence) -> PrivacyState {
@@ -216,6 +256,20 @@ impl PrivacyDomain {
         self.sources
             .get(&evidence)
             .is_some_and(|record| record.supported)
+    }
+
+    /// A timestamp-free fingerprint of what the sources would present.
+    ///
+    /// The candidate set is fully determined by each source's `supported` flag
+    /// and state, not by its `updated_at`. Comparing this fingerprint across an
+    /// applied update lets the root refresh a source's age on a re-affirm
+    /// without republishing an identical presentation.
+    #[must_use]
+    pub fn presentation_fingerprint(&self) -> Vec<(PrivacyEvidence, bool, PrivacyState)> {
+        self.sources
+            .iter()
+            .map(|(evidence, record)| (*evidence, record.supported, record.state))
+            .collect()
     }
 
     /// Build the bounded privacy candidates for the current state.
@@ -472,6 +526,92 @@ mod tests {
         assert_eq!(
             domain.state(PrivacyEvidence::Recording),
             PrivacyState::Unavailable
+        );
+    }
+
+    fn supported_observation(evidence: PrivacyEvidence, state: PrivacyState) -> PrivacyDomain {
+        let mut domain = PrivacyDomain::default();
+        domain.apply(
+            PrivacyUpdate::Supported {
+                evidence,
+                supported: true,
+            },
+            at(0),
+        );
+        domain.apply(PrivacyUpdate::Observed { evidence, state }, at(1));
+        domain
+    }
+
+    #[test]
+    fn evidence_ages_to_stale_exactly_at_the_threshold() {
+        let mut domain = supported_observation(PrivacyEvidence::Microphone, PrivacyState::Active);
+        // One millisecond before the threshold ages nothing.
+        assert!(!domain.expire_stale(at(1 + PRIVACY_EVIDENCE_MAX_AGE_MILLIS - 1)));
+        assert_eq!(
+            domain.state(PrivacyEvidence::Microphone),
+            PrivacyState::Active
+        );
+        // Exactly at the threshold ages to Stale.
+        assert!(domain.expire_stale(at(1 + PRIVACY_EVIDENCE_MAX_AGE_MILLIS)));
+        assert_eq!(
+            domain.state(PrivacyEvidence::Microphone),
+            PrivacyState::Stale
+        );
+    }
+
+    #[test]
+    fn aging_is_once_only_and_ignores_backward_or_duplicate_time() {
+        let mut domain = supported_observation(PrivacyEvidence::Camera, PrivacyState::Inactive);
+        let expired_at = 1 + PRIVACY_EVIDENCE_MAX_AGE_MILLIS;
+        assert!(domain.expire_stale(at(expired_at)));
+        // A second call at the same or a later time changes nothing more; the
+        // source already advanced its timestamp when it became Stale.
+        assert!(!domain.expire_stale(at(expired_at)));
+        assert!(!domain.expire_stale(at(expired_at + PRIVACY_EVIDENCE_MAX_AGE_MILLIS)));
+        // A backward time never ages.
+        let mut fresh = supported_observation(PrivacyEvidence::Camera, PrivacyState::Unknown);
+        assert!(!fresh.expire_stale(at(0)));
+        assert_eq!(fresh.state(PrivacyEvidence::Camera), PrivacyState::Unknown);
+    }
+
+    #[test]
+    fn aging_preserves_unsupported_unavailable_and_recovers_on_fresh_evidence() {
+        // Unsupported sources are never aged.
+        let mut unsupported = PrivacyDomain::default();
+        assert!(!unsupported.expire_stale(at(PRIVACY_EVIDENCE_MAX_AGE_MILLIS * 4)));
+
+        // An already-Unavailable source is preserved, not converted to Stale.
+        let mut unavailable = PrivacyDomain::default();
+        unavailable.apply(
+            PrivacyUpdate::Supported {
+                evidence: PrivacyEvidence::ScreenShare,
+                supported: true,
+            },
+            at(0),
+        );
+        unavailable.apply(
+            PrivacyUpdate::Unavailable(PrivacyEvidence::ScreenShare),
+            at(1),
+        );
+        assert!(!unavailable.expire_stale(at(1 + PRIVACY_EVIDENCE_MAX_AGE_MILLIS)));
+        assert_eq!(
+            unavailable.state(PrivacyEvidence::ScreenShare),
+            PrivacyState::Unavailable
+        );
+
+        // Fresh evidence after aging restores a concrete state.
+        let mut domain = supported_observation(PrivacyEvidence::Microphone, PrivacyState::Active);
+        assert!(domain.expire_stale(at(1 + PRIVACY_EVIDENCE_MAX_AGE_MILLIS)));
+        domain.apply(
+            PrivacyUpdate::Observed {
+                evidence: PrivacyEvidence::Microphone,
+                state: PrivacyState::Active,
+            },
+            at(2 + PRIVACY_EVIDENCE_MAX_AGE_MILLIS),
+        );
+        assert_eq!(
+            domain.state(PrivacyEvidence::Microphone),
+            PrivacyState::Active
         );
     }
 }

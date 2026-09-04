@@ -1590,6 +1590,7 @@ dependencies = [
  "gtk4-layer-shell",
  "pipewire",
  "relm4",
+ "rustix",
  "serde",
  "serde_json",
  "thiserror",

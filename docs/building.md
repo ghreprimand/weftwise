@@ -61,12 +61,23 @@ base, with the standard `.config` home fallback. Cache and state directories use
 the XDG cache and state bases. Runtime endpoints require `XDG_RUNTIME_DIR` and
 have no shared temporary-directory fallback.
 
-Future directory and file writers must apply modes `0700` and `0600`. The
-application currently performs a bounded startup read of this file; an absent
-file selects defaults. Unknown keys, unsupported schema versions, files larger
-than 64 KiB, unsafe CSS token strings, and out-of-range activation geometry are
-errors. Diagnostic formatting redacts resolved paths, desktop text, content
-metadata, and process arguments by default.
+Directory and file writers apply modes `0700` and `0600`. The application
+performs a bounded startup read of `config.toml` and enforces a private-file
+policy on the opened descriptor: the final path component is opened without
+following symlinks (`O_NOFOLLOW`), and the descriptor is `fstat`ed to require a
+regular file owned by the current user with exactly mode `0600`. An absent file
+selects defaults. A symlink, a non-regular file, an owner mismatch, a
+group- or world-accessible mode, a file larger than 64 KiB, unknown keys, an
+unsupported schema version, an unsafe CSS token string, or out-of-range
+activation geometry are errors, and every error is content-free. Create the file
+with the required mode, for example:
+
+```sh
+install -m 600 /dev/null ~/.config/weftwise/config.toml
+```
+
+Diagnostic formatting redacts resolved paths, desktop text, content metadata,
+and process arguments by default.
 
 `[activation]` selects `exposed-edge` or comparison-only `full-width` input and
 bounds the island width, height, margin, and alignment in GDK logical pixels.

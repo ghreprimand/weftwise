@@ -579,7 +579,10 @@ impl AppModel {
             .and_then(|value| value.format("%H:%M"))
             .map(|value| value.to_string())
             .unwrap_or_else(|_| "--:--".to_owned());
-        let outputs = self.state.set_clock_label(label);
+        let mut outputs = self.state.set_clock_label(label);
+        // The minute tick also ages stale privacy evidence so an adapter that
+        // has gone quiet is downgraded to conservative uncertainty over time.
+        outputs.extend(self.state.age_privacy(tick.observed_millis));
         self.render_outputs(outputs);
     }
 

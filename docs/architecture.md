@@ -121,7 +121,27 @@ a link's active flag only across an identical re-announcement; a role, backing,
 or endpoint change resets that flag so a reclassified object cannot inherit a
 stale positive state. Exceeding a bound marks the graph overflowed, which is
 sticky for the connection and reported as a change so a previously trusted source
-does not silently persist. Readiness and trust are modeled separately. Readiness
+does not silently persist. Removal cascades: releasing any object releases the
+whole connected capture component reachable through device-to-node,
+node-to-port, and port-to-link edges, and the removal outcome lists the released
+node and link ids so the transport tracker drops their proxies. A dead dependent
+therefore cannot hold a bounded slot or leave a fragment, and for a privacy
+graph an over-release is conservative because it can only move evidence toward
+unknown, never toward a false inactive.
+
+Supported evidence also ages: the minute clock tick drives an age check that
+downgrades a supported active, inactive, or unknown source to stale once its
+last update is at least five minutes old, so a source whose adapter has gone
+quiet becomes conservative uncertainty rather than a lingering stale assertion.
+Unsupported, unavailable, and already-stale sources are preserved, and fresh
+evidence restores a concrete state. To keep a genuinely continuous source from
+aging, every supported evidence adapter re-affirms its current in-memory state
+on a bounded sixty-second interval (the capture tracker re-emits from its graph,
+logind re-emits its last classified inhibitor set), with no subprocess and no
+new bus call; an unchanged re-affirm refreshes the source's age without
+republishing an identical presentation. The two intervals combine so the
+worst-case false-stale window is zero and the worst-case detection lag for a
+truly silent adapter is the five-minute threshold plus one clock minute. Readiness and trust are modeled separately. Readiness
 uses two core-sync barriers: the first establishes registry enumeration and
 drives the audio snapshot, and the second flushes the node and link info replies
 that binding requested. A graph is ready once the second barrier completes, and a
@@ -159,20 +179,41 @@ The audio domain is transport-independent typed state: bounded sink and source
 nodes with fixed-point linear volume, mute, availability, and per-node
 capabilities, plus the resolved default sink and source. The direct PipeWire
 adapter runs one supervisor-owned loop thread because `libpipewire` objects are
-neither `Send` nor `Sync`. It binds node and default-metadata globals, parses
-each node's `Props` parameter for channel volumes and mute, and resolves the
-default sink and source from the standard `default` metadata that WirePlumber
-owns. Initial registry changes remain private to the adapter until a PipeWire
-Core sync completes, then one bounded snapshot establishes root state before
-incremental updates are published. A Tokio task bridges typed commands into the
+neither `Send` nor `Sync`. It binds node and default-metadata globals whose
+`media.class` is exactly `Audio/Sink` or `Audio/Source` after trimming, so a
+decorated or near-match class is never tracked as a routable endpoint, parses
+each node's `Props` parameter for channel volumes and mute within a bounded pod
+size and channel count, and resolves the default sink and source from the
+standard `default` metadata that WirePlumber owns. The `Props` codec rejects an
+empty, oversized, or trailing-byte pod and rejects rather than truncates an
+over-channel volume array. When the bounded endpoint inventory rejects a fresh
+node, the connection is marked degraded: the partial node set is retained as
+stale uncertainty, the generation and movable-stream selection are cleared so
+no control or move can be issued, and an incremental node update cannot restore
+a false ready. Only a clean resnapshot re-establishes ready. Initial registry
+changes remain private to the adapter until a PipeWire Core sync completes, then
+one bounded snapshot establishes root state before incremental updates are
+published. A Tokio task bridges typed commands into the
 loop thread and forwards typed updates back out; the retained command sender
 keeps that supervised transport alive. No `wpctl` subprocess is polled, and no
 `wireplumber` crate is used.
 
 Volume, mute, and default-route commands are typed and capability-gated by the
-root before dispatch. A rejected request produces content-free error feedback
-rather than a silent failure. Volume and microphone-mute changes on the default
-nodes produce temporary feedback candidates through the shared emitter. The
+root before dispatch. Every scalar control is also readiness- and
+generation-gated. The transport mints one monotonic generation per connection
+attempt and carries it in the snapshot; the root adopts it, so the root and the
+transport share a single generation space. Validation refuses a command unless
+the adapter is `Ready`, stamps the accepted request with the live generation,
+and produces an adapter-internal stamped form. The transport executes only the
+stamped form, refuses the raw variant, and re-checks the stamp against the live
+connection generation exactly as the stream move does. Because the spaces are
+one, a command validated at the root under a prior connection is rejected in the
+transport even when it arrives after a reconnect the root has not yet observed,
+so it can never retarget a coincidentally reused global id. Root output controls
+are projected only while the adapter is `Ready`. A rejected request
+produces content-free error feedback rather than a silent failure. Volume and
+microphone-mute changes on the default nodes produce temporary feedback
+candidates through the shared emitter. The
 displayed volume percentage uses the conventional cubic mapping and remains
 display-only pending native verification; the pod codec that reads and writes
 volume is verified by a serialize/parse round-trip, while live-server behavior
@@ -282,7 +323,9 @@ microphone toggle, a screenshot, or a launched command's result. A pure emitter
 turns those events into bounded, self-expiring feedback candidates. Each kind
 maps to one stable identity, so repeated events update a single candidate in
 place. Every candidate carries an explicit expiration, and its untrusted text
-and progress are bounded before emission. A per-kind minimum interval
+and progress are bounded at ingress: an offered label is truncated and
+control-sanitized before it can enter the rate-limit pending queue, so a
+coalesced event never retains an unbounded string. A per-kind minimum interval
 rate-limits rapid streams such as a dragged volume slider: events inside the
 interval are coalesced to the latest value and flushed once the interval
 elapses, so the final value is never lost. Only already-defined typed actions
@@ -376,13 +419,28 @@ Tokio runtime. It subscribes to `NameOwnerChanged` and player
 snapshot. Unique-owner identity and a local owner generation map property
 signals and commands back to bounded well-known MPRIS names. A player restart
 replaces or removes only that player, and stale commands cannot cross the owner
-generation. Session-bus loss marks retained media state stale, removes its
-presentation candidate, and reconnects with bounded backoff without affecting
-other adapters.
+generation. The player inventory is bounded to a shared maximum on every path:
+the initial snapshot reads identities in lexical order and admits only
+successful reads up to the cap, and the owner-change path applies the same
+deterministic admission through a shared helper, evicting the greatest tracked
+identity for a strictly-lower newcomer and rejecting a larger one, so
+owner and destination bookkeeping cannot grow past the cap. The root projection
+uses the same cap and, in addition, fences resurrection: a `PlayerChanged`
+that began before an owner vanished carries the same or an older owner
+generation and cannot reintroduce the removed player, while a genuine
+reappearance always carries a strictly newer generation. Session-bus loss marks
+retained media state stale, removes its presentation candidate, and reconnects
+with bounded backoff without affecting other adapters.
 
-Raw D-Bus values do not enter GTK or root state. The adapter bounds player
-identity, title, artists, artwork URL, duration, position, and capabilities,
-then publishes complete typed player snapshots. Artwork URLs are retained only
+Raw D-Bus values do not enter GTK or root state. Untrusted payloads are also
+bounded by encoded size before they deserialize: a property-change signal, the
+bus name list, and each player property read (including the metadata dict) are
+rejected against a byte budget before allocation, so a hostile peer cannot force
+an unbounded typed value. An oversized signal still marks the player for a
+bounded refresh, an oversized name list or metadata read fails safely, and the
+logind property signal and `ListInhibitors` reply are bounded the same way. The
+adapter then bounds player identity, title, artists, artwork URL, duration,
+position, and capabilities, and publishes complete typed player snapshots. Artwork URLs are retained only
 after scheme and length checks and are not fetched. Root state chooses playing,
 paused, then recently stopped players, excludes unknown playback states, and
 uses playback activity plus stable identity for ties. It derives one media
@@ -458,14 +516,20 @@ Configuration is versioned TOML loaded from
 `$XDG_CONFIG_HOME/weftwise/config.toml`, falling back to
 `~/.config/weftwise/config.toml`. System defaults may use the XDG configuration
 directories. Unknown keys produce useful diagnostics; invalid user values do
-not silently replace valid defaults.
+not silently replace valid defaults. The reader enforces its private-file
+policy on the opened descriptor rather than the path: the final component is
+opened with `O_NOFOLLOW`, and the descriptor is `fstat`ed to require a regular
+file owned by the effective user with exactly mode `0600`. A missing file falls
+back to defaults; a symlink, a non-regular file, an owner mismatch, an
+over-permissive mode, or an oversized file each returns a content-free error
+that never includes the path or file contents.
 
 Cache and persistent state use the corresponding XDG cache and state bases.
 Per-login sockets or transient state require `XDG_RUNTIME_DIR`; absence is an
 explicit unavailable state rather than a fallback to a shared temporary
 directory. Application directories and private files use modes `0700` and
-`0600` respectively when writers are introduced. Default diagnostics redact
-user paths, desktop text, content metadata, and process arguments.
+`0600` respectively. Default diagnostics redact user paths, desktop text,
+content metadata, and process arguments.
 
 GTK CSS uses semantic tokens for backgrounds, surfaces, text, accent, warning,
 critical state, spacing, radii, and motion. User CSS cannot alter protocol or

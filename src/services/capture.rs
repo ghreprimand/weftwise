@@ -211,6 +211,19 @@ pub fn classify_node_role(input: NodeClassInput<'_>) -> NodeRole {
     }
 }
 
+/// Whether a PipeWire boolean-valued property is enabled.
+///
+/// PipeWire and SPA serialize booleans as either the literal `true`/`false`
+/// spelling or `1`/`0`. Treating only `true` as enabled would let a monitor or
+/// virtual source (`stream.monitor` or `node.virtual` set to `"1"`) escape
+/// classification and present as an active microphone. The comparison is exact
+/// after trimming surrounding whitespace so an unrelated value never enables
+/// the flag.
+#[must_use]
+pub fn pipewire_flag_enabled(value: &str) -> bool {
+    matches!(value.trim(), "true" | "1")
+}
+
 /// Classify a port `port.direction` string into a bounded direction enum.
 #[must_use]
 pub fn classify_port_direction(direction: &str) -> Option<PortDirection> {
@@ -375,6 +388,20 @@ impl CaptureEvidence {
     }
 }
 
+/// Node and link identities released by a cascading [`CaptureGraph::remove`].
+///
+/// A transport tracker uses the listed ids to drop the corresponding PipeWire
+/// proxies so a released dependent cannot linger or reappear as a stale slot.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct RemovalOutcome {
+    /// Node registry ids released by the cascade.
+    pub nodes: Vec<u32>,
+    /// Link registry ids released by the cascade.
+    pub links: Vec<u32>,
+    /// Whether any object was removed.
+    pub changed: bool,
+}
+
 /// Bounded, numeric-only view of the PipeWire graph for capture evidence.
 ///
 /// The graph stores only registry identities and closed enums. It rejects growth
@@ -534,11 +561,66 @@ impl CaptureGraph {
     /// Removal does not clear the overflow flag: once a connection's graph has
     /// been incomplete it stays untrusted until a fresh connection rebuilds it.
     pub fn remove(&mut self, id: u32) -> bool {
-        let mut changed = self.devices.remove(&id).is_some();
-        changed |= self.nodes.remove(&id).is_some();
-        changed |= self.ports.remove(&id).is_some();
-        changed |= self.links.remove(&id).is_some();
-        changed
+        self.remove_cascade(id).changed
+    }
+
+    /// Remove an object and every graph identity that depends on it.
+    ///
+    /// A dangling node, port, or link left after a partial removal could hold a
+    /// bounded cap slot or leave a fragment that is later misread, so removal
+    /// releases the whole connected capture component reachable from `id`
+    /// through device-to-node, node-to-port, and port-to-link edges (and their
+    /// reverses through a link's two ports). For a privacy graph an
+    /// over-release is conservative: it can only move evidence toward `Unknown`,
+    /// never toward a false `Inactive`. The returned [`RemovalOutcome`] lists the
+    /// released node and link ids so a transport tracker can drop their proxies.
+    /// The overflow flag is intentionally not cleared here.
+    pub fn remove_cascade(&mut self, id: u32) -> RemovalOutcome {
+        let mut outcome = RemovalOutcome::default();
+        let mut queue = vec![id];
+        while let Some(current) = queue.pop() {
+            if self.devices.remove(&current).is_some() {
+                outcome.changed = true;
+                for (node_id, node) in &self.nodes {
+                    if node.device_id == Some(current) {
+                        queue.push(*node_id);
+                    }
+                }
+            }
+            if self.nodes.remove(&current).is_some() {
+                outcome.changed = true;
+                outcome.nodes.push(current);
+                for (port_id, port) in &self.ports {
+                    if port.node_id == current {
+                        queue.push(*port_id);
+                    }
+                }
+            }
+            if let Some(port) = self.ports.remove(&current) {
+                outcome.changed = true;
+                // Reach the owning node and every link touching this port so a
+                // capture path is released as a whole rather than in fragments.
+                queue.push(port.node_id);
+                for (link_id, link) in &self.links {
+                    if link.output_port == current || link.input_port == current {
+                        queue.push(*link_id);
+                    }
+                }
+            }
+            if let Some(link) = self.links.remove(&current) {
+                outcome.changed = true;
+                outcome.links.push(current);
+                queue.push(link.output_port);
+                queue.push(link.input_port);
+            }
+        }
+        outcome
+    }
+
+    /// Whether a device with this id is currently retained.
+    #[must_use]
+    pub fn contains_device(&self, id: u32) -> bool {
+        self.devices.contains_key(&id)
     }
 
     /// Whether a node with this id is currently retained.
@@ -715,7 +797,7 @@ mod transport {
     use super::{
         BarrierOutcome, CaptureGraph, CaptureKind, CaptureObservation, NodeClassInput, NodeRole,
         PrivacyState, classify_device_api, classify_node_role, classify_port_direction,
-        overflow_became_set, resolve_capture_state, second_barrier_outcome,
+        overflow_became_set, pipewire_flag_enabled, resolve_capture_state, second_barrier_outcome,
     };
 
     /// Publisher of capture observations back to the supervised task.
@@ -819,13 +901,11 @@ mod transport {
             };
             let is_monitor = props
                 .get("stream.monitor")
-                .is_some_and(|value| value == "true")
+                .is_some_and(pipewire_flag_enabled)
                 || props
                     .get("node.name")
                     .is_some_and(|name| name.ends_with(".monitor"));
-            let is_virtual = props
-                .get("node.virtual")
-                .is_some_and(|value| value == "true");
+            let is_virtual = props.get("node.virtual").is_some_and(pipewire_flag_enabled);
             let role = classify_node_role(NodeClassInput {
                 media_class,
                 is_monitor,
@@ -981,12 +1061,23 @@ mod transport {
         }
 
         /// Observe removal of a registry global by id.
+        ///
+        /// The cascade releases dependent nodes and links, so their proxies are
+        /// dropped here too; a released dependent must not keep a listener alive
+        /// or hold a bounded slot.
         pub fn observe_remove(this: &Rc<RefCell<Self>>, id: u32) {
             let changed = {
                 let mut tracker = this.borrow_mut();
+                let outcome = tracker.graph.remove_cascade(id);
                 tracker.node_proxies.remove(&id);
                 tracker.link_proxies.remove(&id);
-                tracker.graph.remove(id)
+                for node in &outcome.nodes {
+                    tracker.node_proxies.remove(node);
+                }
+                for link in &outcome.links {
+                    tracker.link_proxies.remove(link);
+                }
+                outcome.changed
             };
             if changed {
                 Self::republish(this);
@@ -1076,6 +1167,44 @@ mod transport {
             }
         }
 
+        /// Re-affirm the current per-source states unconditionally.
+        ///
+        /// Unlike the delta republish, this emits an observation for every
+        /// supported source even when the state is unchanged, so the root's
+        /// evidence age is refreshed on a bounded interval and a continuously
+        /// active or unknown source is never aged to false uncertainty. The
+        /// root treats an unchanged state as a no-op re-affirm. Nothing is
+        /// emitted before the graph is ready, matching the pre-trust states,
+        /// which are failure states the root does not age.
+        pub fn reaffirm(this: &Rc<RefCell<Self>>) {
+            let (publish, observations) = {
+                let tracker = this.borrow();
+                if !tracker.ready {
+                    return;
+                }
+                let overflowed = tracker.graph.overflowed();
+                let trusted = tracker.trusted;
+                let observed_millis = tracker.elapsed_millis();
+                let observation = |kind: CaptureKind| {
+                    CaptureObservation::observed(
+                        kind,
+                        resolve_capture_state(tracker.graph.path_active(kind), overflowed, trusted),
+                        observed_millis,
+                    )
+                };
+                (
+                    tracker.publish.clone(),
+                    vec![
+                        observation(CaptureKind::Microphone),
+                        observation(CaptureKind::Camera),
+                    ],
+                )
+            };
+            for observation in observations {
+                (publish)(observation);
+            }
+        }
+
         /// Compute the per-source observations that changed since the last
         /// publish and record the new states.
         fn delta_observations(
@@ -1110,6 +1239,36 @@ mod transport {
 mod tests {
     use super::*;
 
+    #[cfg(feature = "audio-transport")]
+    #[test]
+    fn reaffirm_emits_current_evidence_for_both_sources() {
+        use std::sync::{Arc, Mutex};
+
+        let sink: Arc<Mutex<Vec<CaptureObservation>>> = Arc::new(Mutex::new(Vec::new()));
+        let collected = Arc::clone(&sink);
+        let publish: PublishCapture =
+            Arc::new(move |observation| collected.lock().unwrap().push(observation));
+        let tracker = CaptureTracker::new(publish, std::time::Instant::now());
+        // Reach a trusted, ready graph, then clear the barrier's own emissions.
+        CaptureTracker::finish_barrier(&tracker, true);
+        sink.lock().unwrap().clear();
+
+        CaptureTracker::reaffirm(&tracker);
+        let observations = sink.lock().unwrap();
+        // The re-affirm tick re-emits an observation for each supported source
+        // even though nothing changed, refreshing the root's evidence age.
+        assert_eq!(observations.len(), 2);
+        let kinds: Vec<_> = observations
+            .iter()
+            .map(|observation| match observation.update {
+                PrivacyUpdate::Observed { evidence, .. } => evidence,
+                other => panic!("expected an Observed re-affirm, got {other:?}"),
+            })
+            .collect();
+        assert!(kinds.contains(&CaptureKind::Microphone.evidence()));
+        assert!(kinds.contains(&CaptureKind::Camera.evidence()));
+    }
+
     fn microphone_ready_graph() -> CaptureGraph {
         // A complete, running microphone path:
         // ALSA device 10 -> source node 11 (out port 12) -> active link 13
@@ -1138,6 +1297,33 @@ mod tests {
         assert_eq!(classify_device_api("bluez"), DeviceApi::Other);
         assert_eq!(classify_device_api("v4l2loopback-fake"), DeviceApi::Other);
         assert_eq!(classify_device_api("null-audio"), DeviceApi::Other);
+    }
+
+    #[test]
+    fn pipewire_flag_accepts_true_and_one_only() {
+        for enabled in ["true", "1", " true ", "\t1\n"] {
+            assert!(pipewire_flag_enabled(enabled), "{enabled:?} must enable");
+        }
+        for disabled in ["false", "0", "", "yes", "TRUE", "11", "1.0"] {
+            assert!(
+                !pipewire_flag_enabled(disabled),
+                "{disabled:?} must not enable"
+            );
+        }
+    }
+
+    #[test]
+    fn monitor_source_with_string_one_is_not_a_microphone() {
+        // A monitor source advertising `stream.monitor = "1"` must classify as
+        // Other, never an audio source, so it cannot present as a live mic.
+        assert_eq!(
+            classify_node_role(NodeClassInput {
+                media_class: "Audio/Source",
+                is_monitor: pipewire_flag_enabled("1"),
+                is_virtual: false,
+            }),
+            NodeRole::Other
+        );
     }
 
     #[test]
@@ -1337,6 +1523,62 @@ mod tests {
         assert_eq!(graph.evaluate().microphone, PrivacyState::Active);
         assert!(graph.remove(13));
         assert_eq!(graph.evaluate().microphone, PrivacyState::Unknown);
+    }
+
+    #[test]
+    fn removing_any_component_member_releases_the_whole_path() {
+        // device 1 - node 2 - port 4 -> link 6 -> port 5 - node 3
+        let build = || {
+            let mut graph = CaptureGraph::new();
+            graph.upsert_device(1, DeviceApi::Alsa);
+            graph.upsert_node(2, NodeRole::AudioSource, Some(1));
+            graph.upsert_node(3, NodeRole::AudioInputStream, None);
+            graph.upsert_port(4, 2, PortDirection::Output);
+            graph.upsert_port(5, 3, PortDirection::Input);
+            graph.upsert_link(6, 4, 5);
+            graph
+        };
+        // Removing the backing device releases the whole path.
+        let mut graph = build();
+        let outcome = graph.remove_cascade(1);
+        assert!(outcome.changed);
+        assert!(graph.is_empty(), "removing the device must empty the path");
+        let mut nodes = outcome.nodes.clone();
+        nodes.sort_unstable();
+        assert_eq!(nodes, vec![2, 3]);
+        assert_eq!(outcome.links, vec![6]);
+
+        // Removing a non-device member releases the connected stream chain
+        // (both nodes, ports, and the link) but leaves the backing device,
+        // which may still front other nodes.
+        for member in [2, 3, 4, 5, 6] {
+            let mut graph = build();
+            assert!(
+                graph.remove(member),
+                "removing {member} must change the graph"
+            );
+            assert!(
+                graph.contains_device(1),
+                "removing {member} must retain the backing device"
+            );
+            assert!(
+                !graph.contains_node(2) && !graph.contains_node(3) && !graph.contains_link(6),
+                "removing {member} must release the whole stream chain"
+            );
+        }
+    }
+
+    #[test]
+    fn repeated_hotplug_below_cap_never_marks_overflow() {
+        let mut graph = CaptureGraph::new();
+        for _ in 0..8 {
+            graph.upsert_device(1, DeviceApi::Alsa);
+            graph.upsert_node(2, NodeRole::AudioSource, Some(1));
+            graph.upsert_port(4, 2, PortDirection::Output);
+            assert!(graph.remove(1));
+            assert!(graph.is_empty());
+        }
+        assert!(!graph.overflowed());
     }
 
     #[test]

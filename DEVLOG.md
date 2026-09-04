@@ -6,6 +6,151 @@ or unmeasured. Planned work is never presented as implemented behavior.
 
 ---
 
+## 2026-09-03 - Service hardening corrections: unified audio generation, FIFO-safe config, pod module, privacy re-affirm
+
+Corrections to the service-boundary work after a second reading of the code.
+
+The audio scalar-command generation is now a single space shared by the root and
+the transport. The transport mints one monotonic generation per connection and
+carries it in the snapshot; `AudioState` adopts it (the separate root counter is
+gone). The transport `dispatch` re-checks a stamped scalar command's generation
+against the live connection, exactly as the stream move already did, so a command
+validated at the root under a prior connection is refused in the transport even
+when it arrives after a reconnect the root has not yet observed. This closes the
+window where two independent counters could let a stale command execute against a
+reused global id.
+
+`Config::load` now opens with `O_NONBLOCK` in addition to `O_NOFOLLOW`, so a FIFO
+placed at the config path returns a descriptor instead of blocking startup; the
+`fstat` check then rejects it as a non-regular file.
+
+The SPA `Props` pod codec, its size and channel bounds, and its tests moved to a
+new `src/services/audio/pod.rs`, re-exported from `services::audio` so importers
+and tests are unchanged. The audio model's unit tests moved to a sibling
+`tests.rs`. `src/services/audio/mod.rs` dropped from about 1,990 to roughly 1,130
+lines, under the refactor target.
+
+Privacy aging no longer risks false uncertainty for a continuously active source.
+Every supported evidence adapter re-affirms its current in-memory state on a
+sixty-second interval (the capture tracker re-emits from its graph via a loop
+timer; logind re-emits its last classified inhibitor set on a cancellation-aware
+interval), with no subprocess and no new bus call. The root refreshes a source's
+age on re-affirm but does not republish an identical presentation. Aging (five
+minutes) therefore fires only when an adapter has genuinely gone silent; the
+worst-case false-stale window is zero and the worst-case detection lag is the
+threshold plus one clock minute.
+
+Verified on the host: formatting, deny-warning Clippy across all targets, the
+full locked test suite including new generation-freshness, FIFO-rejection,
+capture and logind re-affirm, and root aging-versus-re-affirm tests,
+documentation warnings, the `audio-transport` feature check, the RustSec audit,
+and the worktree public-safety scan. The live transport generation recheck, the
+capture loop timer, and wall-clock re-affirm against a running session remain
+unmeasured in this headless environment.
+
+---
+
+## 2026-09-02 - Service-bound safety: D-Bus payload bounds, PipeWire class/overflow, cascade removal, pod bounds, privacy aging
+
+Five further service-boundary corrections landed together.
+
+Untrusted D-Bus payloads are now bounded by encoded body size before they
+deserialize. A shared pure guard rejects a body length over a per-site budget so
+the decode never runs above the cap: MPRIS property signals and metadata replies
+at 64 KiB, the bus name list at 256 KiB, scalar player properties at 4 KiB, the
+logind property signal at 64 KiB, and `ListInhibitors` at 256 KiB. MPRIS reads
+now use raw `Properties.Get`/`ListNames` calls so the reply can be size-checked
+before allocation; an oversized MPRIS signal still marks the player for a bounded
+refresh, an oversized list or metadata read fails safely, and an oversized logind
+signal forces a fresh bounded resnapshot.
+
+PipeWire endpoint classification is now exact: only a trimmed `Audio/Sink` or
+`Audio/Source` is a routable endpoint, so a decorated or near-match class is
+never tracked. When the bounded endpoint inventory rejects a fresh node the
+connection is marked degraded rather than silently dropping the node and staying
+ready: the partial set is retained as stale uncertainty, the generation and
+movable-stream selection are cleared, an incremental upsert can no longer restore
+a false ready, and only a clean resnapshot re-establishes ready.
+
+Capture-graph removal cascades. Releasing any object releases the whole connected
+capture component reachable through device-to-node, node-to-port, and
+port-to-link edges, returning the released node and link ids so the transport
+tracker drops their proxies. A dead dependent can no longer hold a bounded slot
+or leave a fragment; for a privacy graph an over-release is conservative because
+it can only move evidence toward unknown.
+
+The SPA `Props` pod codec is bounded: it rejects an empty pod, a pod over 64 KiB,
+trailing bytes after the first complete pod, and a channel-volume array naming
+more than 64 channels (rejected rather than truncated).
+
+Privacy evidence ages. The minute clock tick, extended with a monotonic
+observation time, drives an age check that downgrades a supported active,
+inactive, or unknown source to stale once its last update is at least five
+minutes old, republishing only on change. Unsupported, unavailable, and
+already-stale sources are preserved, and fresh evidence restores a concrete
+state.
+
+Verified on the host: formatting, deny-warning Clippy across all targets, the
+full locked test suite (including new cascade-removal, pod-bounds, endpoint-class
+and degraded, D-Bus body-cap, and privacy-aging tests), documentation warnings,
+the `audio-transport` feature check, the RustSec audit, and the worktree
+public-safety scan. Live D-Bus and PipeWire behavior (real oversized peer
+payloads, real endpoint overflow, real hotplug cascades, and wall-clock aging
+against a live session) remains unmeasured in this headless environment.
+
+## 2026-09-02 - Service-bound safety: audio generations, MPRIS admission, config policy, and ingress bounds
+
+Six service-boundary corrections landed together.
+
+Audio scalar controls (`SetVolume`, `SetMute`, `ToggleMute`, `SetDefault`) are
+now readiness- and generation-gated like stream moves already were. `AudioState`
+carries a connection generation minted only by a complete snapshot and cleared
+on reconnect or unavailability by a monotonic counter that never repeats.
+Validation refuses a scalar control unless the adapter is `Ready`, stamps the
+accepted request with the live generation into an adapter-internal `*On` form,
+and rejects a stamped command whose generation no longer matches. The transport
+executes only the `*On` forms and refuses the raw variants, and root output
+controls project only while `Ready`, so a command queued against one connection
+cannot retarget a coincidentally reused global id after a reconnect.
+
+MPRIS player admission is bounded deterministically on every path through one
+shared helper. The initial snapshot reads identities in lexical order and admits
+only successful reads up to the cap; the owner-change path applies the same
+admission, evicting the greatest tracked identity for a strictly-lower newcomer
+and rejecting a larger one, so owner and destination bookkeeping cannot grow
+past the cap. The root projection reuses the shared cap and constant (no more
+literal `32`) and additionally fences resurrection: a `PlayerChanged` that began
+before an owner vanished carries the same or an older owner generation and
+cannot reintroduce the removed player, while a genuine reappearance carries a
+strictly newer one.
+
+`Config::load` enforces its private-file policy on the opened descriptor via a
+direct `rustix` dependency (`fs`, `process` features; already in the lock, no
+new crates). The final path component is opened `RDONLY|CLOEXEC|NOFOLLOW`, and
+the descriptor is `fstat`ed to require a regular file owned by the effective
+user with exactly mode `0600`. A missing file falls back to defaults; a symlink,
+non-regular file, owner mismatch, over-permissive mode, or oversized file each
+returns a content-free error that never includes the path or contents. The
+ownership comparison is a pure, unit-tested helper.
+
+Temporary feedback labels are now truncated and control-sanitized at `offer`
+ingress, before a rate-limited event can enter the pending queue, so a coalesced
+event never retains an unbounded string. PipeWire boolean properties
+`stream.monitor` and `node.virtual` are matched through a shared helper that
+accepts both `true` and `1`, so a monitor or virtual source advertising `"1"`
+cannot present as an active microphone. The local-activity endpoint's accept
+loop backs off with bounded jitter (25 ms to 1 s, cancellation-aware, reset on a
+successful accept) instead of spinning on a transient accept failure.
+
+Verified on the host: formatting, deny-warning Clippy across all targets, the
+full locked test suite (including new audio generation, MPRIS admission and
+resurrection-fence, config file-policy, feedback ingress, PipeWire boolean, and
+accept-backoff tests), documentation warnings, the `audio-transport` feature
+check, the RustSec audit, and the worktree public-safety scan. On-screen and
+live-service behavior (real PipeWire scalar dispatch, live MPRIS owner churn,
+real filesystem races, and endpoint accept storms under load) remains unmeasured
+in this headless environment.
+
 ## 2026-09-02 - Off-GTK-thread shutdown join and widget module extraction
 
 The application supervisor no longer busy-waits the calling (GTK) thread during

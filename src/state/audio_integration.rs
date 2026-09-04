@@ -35,10 +35,11 @@ impl AppState {
                 nodes,
                 default_sink,
                 default_source,
+                generation,
                 ..
             } => self
                 .audio
-                .apply_snapshot(nodes, default_sink, default_source),
+                .apply_snapshot(nodes, default_sink, default_source, generation),
             AudioUpdate::NodeChanged { node, .. } => self.audio.upsert_node(node),
             AudioUpdate::NodeRemoved { id, .. } => self.audio.remove_node(id),
             AudioUpdate::DefaultChanged {
@@ -52,6 +53,12 @@ impl AppState {
                 // produces no user-facing feedback candidate.
                 self.audio.set_movable_stream(state);
                 return Vec::new();
+            }
+            AudioUpdate::Degraded => {
+                // An endpoint inventory overflow leaves the node set partial;
+                // retain it as Stale uncertainty and clear control/move state.
+                self.audio.mark_degraded();
+                return self.output_ids().collect();
             }
             AudioUpdate::Unavailable => {
                 self.audio.mark_unavailable();
@@ -132,7 +139,7 @@ impl AppState {
 
 fn audio_update_observed_millis(update: &AudioUpdate) -> u64 {
     match update {
-        AudioUpdate::Connecting | AudioUpdate::Unavailable => 0,
+        AudioUpdate::Connecting | AudioUpdate::Degraded | AudioUpdate::Unavailable => 0,
         AudioUpdate::Snapshot {
             observed_millis, ..
         }

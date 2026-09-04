@@ -22,7 +22,14 @@ use super::{
     MAX_ACTIVITY_FRAME_BYTES, decode_frame, endpoint_path,
 };
 use crate::config::{ConfigPaths, PRIVATE_DIRECTORY_MODE, PRIVATE_FILE_MODE};
-use crate::supervisor::Cancellation;
+use crate::supervisor::{Cancellation, ReconnectBackoff};
+
+/// Minimum delay after a transient `accept` failure before retrying.
+const ACCEPT_BACKOFF_MINIMUM: Duration = Duration::from_millis(25);
+/// Maximum delay after repeated `accept` failures.
+const ACCEPT_BACKOFF_MAXIMUM: Duration = Duration::from_secs(1);
+/// Deterministic jitter seed for the accept backoff.
+const ACCEPT_BACKOFF_SEED: u64 = 0x7765_6674_7769_7365;
 
 /// Maximum clients whose frames may be processed concurrently.
 pub const MAX_ACTIVITY_CLIENTS: usize = 8;
@@ -156,6 +163,14 @@ impl ActivityEndpoint {
         let permits = Arc::new(Semaphore::new(MAX_ACTIVITY_CLIENTS));
         let mut clients = JoinSet::new();
         let started = Instant::now();
+        // A transient accept failure (descriptor exhaustion, a peer aborting
+        // during the handshake) must not spin the loop at full CPU. Back off
+        // with bounded jitter and reset after any successful accept.
+        let mut accept_backoff = ReconnectBackoff::new(
+            ACCEPT_BACKOFF_MINIMUM,
+            ACCEPT_BACKOFF_MAXIMUM,
+            ACCEPT_BACKOFF_SEED,
+        );
 
         loop {
             while clients.try_join_next().is_some() {}
@@ -163,8 +178,14 @@ impl ActivityEndpoint {
                 result = self.listener.accept() => {
                     let Ok((stream, _address)) = result else {
                         tracing::warn!("activity endpoint accept failed");
+                        let delay = accept_backoff.next_delay();
+                        tokio::select! {
+                            () = tokio::time::sleep(delay) => {}
+                            () = cancellation.cancelled() => return,
+                        }
                         continue;
                     };
+                    accept_backoff.reset();
                     let Ok(permit) = Arc::clone(&permits).try_acquire_owned() else {
                         continue;
                     };
@@ -441,6 +462,25 @@ mod tests {
     use super::*;
 
     static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(1);
+
+    #[test]
+    fn accept_backoff_increases_and_caps() {
+        let mut backoff = ReconnectBackoff::new(
+            ACCEPT_BACKOFF_MINIMUM,
+            ACCEPT_BACKOFF_MAXIMUM,
+            ACCEPT_BACKOFF_SEED,
+        );
+        // The first delay sits near the minimum (with bounded jitter) and every
+        // delay stays within the maximum cap; the schedule never spins hot.
+        let first = backoff.next_delay();
+        assert!(first <= ACCEPT_BACKOFF_MINIMUM + ACCEPT_BACKOFF_MINIMUM / 5);
+        for _ in 0..12 {
+            assert!(backoff.next_delay() <= ACCEPT_BACKOFF_MAXIMUM);
+        }
+        // A reset returns the schedule to the minimum after a successful accept.
+        backoff.reset();
+        assert!(backoff.next_delay() <= ACCEPT_BACKOFF_MINIMUM + ACCEPT_BACKOFF_MINIMUM / 5);
+    }
 
     struct SyntheticRuntime {
         base: PathBuf,

@@ -2,9 +2,11 @@
 
 use std::env;
 use std::fs::File;
-use std::io::{self, Read};
+use std::io::Read;
+use std::os::fd::OwnedFd;
 use std::path::{Path, PathBuf};
 
+use rustix::fs::{Mode, OFlags};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -203,16 +205,51 @@ impl Config {
     }
 
     /// Load the bounded XDG configuration file, or defaults when it is absent.
+    ///
+    /// The reader enforces a private-file policy on the opened descriptor
+    /// rather than on the path, so a symlink or a swap between the check and
+    /// the read cannot redirect it. The final path component is opened with
+    /// `O_NOFOLLOW`, and the resulting descriptor is `fstat`ed to require a
+    /// regular file owned by the effective user with exactly mode `0600`. A
+    /// missing file falls back to defaults; every other unsafe condition
+    /// returns a content-free error that never includes the path or contents.
     pub fn load(path: &Path) -> Result<Self, ConfigLoadError> {
-        let file = match File::open(path) {
-            Ok(file) => file,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Self::default()),
-            Err(source) => return Err(ConfigLoadError::Read { source }),
+        let fd = match rustix::fs::open(
+            path,
+            // NONBLOCK ensures a FIFO at the config path returns a descriptor
+            // instead of blocking startup on a writer; fstat then rejects it as
+            // a non-regular file.
+            OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK,
+            Mode::empty(),
+        ) {
+            Ok(fd) => fd,
+            Err(rustix::io::Errno::NOENT) => return Ok(Self::default()),
+            // O_NOFOLLOW reports a symlinked final component as ELOOP.
+            Err(rustix::io::Errno::LOOP) => return Err(ConfigLoadError::UnsafeSymlink),
+            Err(_) => return Err(ConfigLoadError::Unreadable),
         };
+        Self::from_verified_fd(fd)
+    }
+
+    /// Validate the opened descriptor's type, owner, and mode, then read it.
+    fn from_verified_fd(fd: OwnedFd) -> Result<Self, ConfigLoadError> {
+        let stat = rustix::fs::fstat(&fd).map_err(|_| ConfigLoadError::Unreadable)?;
+        let file_type = rustix::fs::FileType::from_raw_mode(stat.st_mode);
+        if file_type != rustix::fs::FileType::RegularFile {
+            return Err(ConfigLoadError::NotRegularFile);
+        }
+        if !owner_matches(u64::from(stat.st_uid), rustix::process::geteuid().as_raw()) {
+            return Err(ConfigLoadError::OwnerMismatch);
+        }
+        if stat.st_mode & 0o777 != PRIVATE_FILE_MODE {
+            return Err(ConfigLoadError::InsecurePermissions);
+        }
+
         let mut bytes = Vec::new();
-        file.take(MAX_CONFIG_BYTES + 1)
+        File::from(fd)
+            .take(MAX_CONFIG_BYTES + 1)
             .read_to_end(&mut bytes)
-            .map_err(|source| ConfigLoadError::Read { source })?;
+            .map_err(|_| ConfigLoadError::Unreadable)?;
         if bytes.len() as u64 > MAX_CONFIG_BYTES {
             return Err(ConfigLoadError::TooLarge);
         }
@@ -272,6 +309,16 @@ impl Config {
         }
         Ok(())
     }
+}
+
+/// Whether an opened file's owner uid matches the effective process uid.
+///
+/// Extracted as a pure helper so the ownership rule can be unit tested; a test
+/// process cannot create a file owned by a different user, so the comparison
+/// itself is what the test exercises.
+#[must_use]
+pub(crate) fn owner_matches(file_uid: u64, effective_uid: u32) -> bool {
+    file_uid == u64::from(effective_uid)
 }
 
 fn valid_hex_color(value: &str) -> bool {
@@ -501,13 +548,22 @@ pub enum ConfigLoadError {
     /// The file exceeded the configured input bound.
     #[error("configuration file exceeds 64 KiB")]
     TooLarge,
-    /// The file could not be read.
+    /// The final path component is a symlink; the private-file policy requires
+    /// a real regular file opened without following links.
+    #[error("configuration file must not be a symbolic link")]
+    UnsafeSymlink,
+    /// The opened descriptor is not a regular file.
+    #[error("configuration file must be a regular file")]
+    NotRegularFile,
+    /// The file is not owned by the effective user.
+    #[error("configuration file must be owned by the current user")]
+    OwnerMismatch,
+    /// The file mode is not the required private `0600`.
+    #[error("configuration file must have mode 0600")]
+    InsecurePermissions,
+    /// The file could not be opened or read.
     #[error("configuration file could not be read")]
-    Read {
-        /// Underlying operating-system failure without the requested path.
-        #[source]
-        source: io::Error,
-    },
+    Unreadable,
     /// The file was not valid UTF-8.
     #[error("configuration file is not valid UTF-8")]
     Encoding,
@@ -686,5 +742,147 @@ mod tests {
         assert!(policy.redact_desktop_text);
         assert!(policy.redact_content);
         assert!(policy.redact_process_arguments);
+    }
+
+    mod file_policy {
+        use super::*;
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+
+        struct Scratch(PathBuf);
+
+        impl Scratch {
+            fn new() -> Self {
+                let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+                let dir = std::env::temp_dir()
+                    .join(format!("weftwise-cfg-{}-{unique}", std::process::id()));
+                fs::create_dir_all(&dir).expect("scratch dir");
+                Self(dir)
+            }
+
+            fn path(&self, name: &str) -> PathBuf {
+                self.0.join(name)
+            }
+
+            fn write_mode(&self, name: &str, body: &str, mode: u32) -> PathBuf {
+                let path = self.path(name);
+                fs::write(&path, body).expect("write config");
+                fs::set_permissions(&path, fs::Permissions::from_mode(mode)).expect("chmod");
+                path
+            }
+        }
+
+        impl Drop for Scratch {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+
+        #[test]
+        fn missing_file_falls_back_to_defaults() {
+            let scratch = Scratch::new();
+            assert_eq!(
+                Config::load(&scratch.path("absent.toml")).unwrap(),
+                Config::default()
+            );
+        }
+
+        #[test]
+        fn valid_private_file_loads() {
+            let scratch = Scratch::new();
+            let path = scratch.write_mode("config.toml", "reduced_motion = true", 0o600);
+            let config = Config::load(&path).expect("valid private config");
+            assert_eq!(config.reduced_motion, Some(true));
+        }
+
+        #[test]
+        fn symlinked_config_is_rejected() {
+            let scratch = Scratch::new();
+            let target = scratch.write_mode("target.toml", "", 0o600);
+            let link = scratch.path("link.toml");
+            std::os::unix::fs::symlink(&target, &link).expect("symlink");
+            assert!(matches!(
+                Config::load(&link),
+                Err(ConfigLoadError::UnsafeSymlink)
+            ));
+        }
+
+        #[test]
+        fn directory_is_not_a_regular_file() {
+            let scratch = Scratch::new();
+            let dir = scratch.path("config-dir");
+            fs::create_dir(&dir).expect("dir");
+            fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).expect("chmod");
+            assert!(matches!(
+                Config::load(&dir),
+                Err(ConfigLoadError::NotRegularFile)
+            ));
+        }
+
+        #[test]
+        fn group_or_world_accessible_modes_are_rejected() {
+            let scratch = Scratch::new();
+            for mode in [0o644, 0o660, 0o604, 0o640] {
+                let path = scratch.write_mode("config.toml", "", mode);
+                assert!(
+                    matches!(
+                        Config::load(&path),
+                        Err(ConfigLoadError::InsecurePermissions)
+                    ),
+                    "mode {mode:o} must be rejected"
+                );
+            }
+        }
+
+        #[test]
+        fn fifo_at_config_path_is_rejected_without_blocking() {
+            let scratch = Scratch::new();
+            let path = scratch.path("config.toml");
+            rustix::fs::mkfifoat(
+                rustix::fs::CWD,
+                &path,
+                rustix::fs::Mode::from_raw_mode(0o600),
+            )
+            .expect("mkfifo");
+            // NONBLOCK means the open returns instead of blocking on a writer,
+            // and fstat rejects the FIFO as a non-regular file.
+            assert!(matches!(
+                Config::load(&path),
+                Err(ConfigLoadError::NotRegularFile)
+            ));
+        }
+
+        #[test]
+        fn oversized_file_is_rejected() {
+            let scratch = Scratch::new();
+            let body = "#".repeat((MAX_CONFIG_BYTES as usize) + 1);
+            let path = scratch.write_mode("config.toml", &body, 0o600);
+            assert!(matches!(
+                Config::load(&path),
+                Err(ConfigLoadError::TooLarge)
+            ));
+        }
+
+        #[test]
+        fn owner_rule_compares_uid() {
+            assert!(owner_matches(1_000, 1_000));
+            assert!(!owner_matches(0, 1_000));
+            assert!(!owner_matches(1_001, 1_000));
+        }
+
+        #[test]
+        fn policy_errors_reveal_neither_path_nor_contents() {
+            let scratch = Scratch::new();
+            let secret = "reduced_motion = true # synthetic-secret-marker";
+            let path = scratch.write_mode("config.toml", secret, 0o644);
+            let error = Config::load(&path).expect_err("insecure mode");
+            for rendered in [error.to_string(), format!("{error:?}")] {
+                assert!(!rendered.contains("synthetic-secret-marker"));
+                assert!(!rendered.contains("config.toml"));
+            }
+        }
     }
 }
